@@ -53,12 +53,10 @@ class ResourceService:
             "uri": {"type": "string"},
             "username": {"type": "string"},
             "description": {"type": ["string", "null"]},
-            "icon": {
-                "type": ["object", "null"],
-                "properties": {
-                    "url": {"type": "string"},
-                    "hash": {"type": "string"}
-                }
+            "icon": {"type": ["object", "null"]},
+            "custom_fields": {
+                "type": ["array", "null"],
+                "items": {"type": "object"}
             }
         }
     }
@@ -67,7 +65,6 @@ class ResourceService:
         "type": "object",
         "properties": {
             "password": {"type": "string"},
-            "username": {"type": "string"},
             "description": {"type": ["string", "null"]},
             "totp": {
                 "type": ["object", "null"],
@@ -78,7 +75,12 @@ class ResourceService:
                     "period": {"type": "integer"}
                 }
             },
-            "custom_fields": {"type": "object"}
+            "custom_fields": {
+                "type": ["array", "null"],
+                "items": {
+                    "type": "object"
+                }
+            }
         }
     }
 
