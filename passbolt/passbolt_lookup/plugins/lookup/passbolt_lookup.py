@@ -41,6 +41,9 @@ from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.
     APIFormatException
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.exceptions.authentication_exception import \
     AuthenticationException
+from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.api.exceptions.resource_exceptions import (
+    ResourceException,
+)
 
 display = Display()
 
@@ -77,8 +80,15 @@ class LookupModule(LookupBase):
                                                     timeout=self.get_option('timeout'))
             if passbolt_api_client.login():
                 display.vvvv('Logged in')
+
+            resource = passbolt_api_client.get_resource(resource_uuid)
+            display.vvvv('Resource retrieved successfully')
+
             if passbolt_api_client.logout():
                 display.vvvv('Logged out')
+
+            return [resource]
+
         except GnuPGException as e:
             raise AnsibleError("A GnuPG exception occurred: '%s'" % e)
         except APIFormatException as e:
@@ -87,6 +97,8 @@ class LookupModule(LookupBase):
             raise AnsibleError("There was a problem when authenticating with the API: '%s'" % e)
         except PassboltAccountKitDeserializationException as e:
             raise AnsibleError("There was a problem when deserializing the Passbolt account kit: '%s'" % e)
+        except ResourceException as e:
+            raise AnsibleError("There was a problem when retrieving the resource: '%s'" % e)
         except Exception as e:
             raise AnsibleError("An unknown exception occurred: '%s'" % e)
 
