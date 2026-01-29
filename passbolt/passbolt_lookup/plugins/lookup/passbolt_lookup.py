@@ -77,6 +77,8 @@ class LookupModule(LookupBase):
                                                     timeout=self.get_option('timeout'))
             if passbolt_api_client.login():
                 display.vvvv('Logged in')
+            if passbolt_api_client.logout():
+                display.vvvv('Logged out')
         except GnuPGException as e:
             raise AnsibleError("A GnuPG exception occurred: '%s'" % e)
         except APIFormatException as e:

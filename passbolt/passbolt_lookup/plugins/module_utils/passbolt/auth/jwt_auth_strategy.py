@@ -94,4 +94,8 @@ class JWTAuthStrategy(AuthStrategy):
     @classmethod
     def logout(cls, passbolt_account: PassboltAccount, jwt_credentials: JWTCredentials, verify: bool = True,
                timeout: int = 30) -> bool:
-        raise NotImplementedError()
+        api_request = APIRequest(HTTPMethod.POST, urljoin(passbolt_account.fullbase_url, "auth/jwt/logout.json"),
+                                 auth_credentials=jwt_credentials, body={"refresh_token": jwt_credentials.refresh_token},
+                                 verify=verify, timeout=timeout)
+        api_response = HTTPClientService.send(api_request)
+        return api_response.is_success()
