@@ -23,8 +23,9 @@ class PassboltAPIClient(object):
         if self._resource_service:
             self._resource_service.clear_cache()
             self._resource_service = None
+        auth_credentials = self.auth_credentials
         self.auth_credentials = None
-        return JWTAuthStrategy.logout(self.passbolt_account, self.auth_credentials, verify = self.verify,
+        return JWTAuthStrategy.logout(self.passbolt_account, auth_credentials, verify = self.verify,
                                       timeout = self.timeout)
 
 
