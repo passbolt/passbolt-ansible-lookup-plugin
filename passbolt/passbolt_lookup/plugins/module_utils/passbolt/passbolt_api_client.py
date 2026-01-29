@@ -17,7 +17,8 @@ class PassboltAPIClient(object):
         return True
 
     def logout(self) -> bool:
-        raise NotImplementedError()
+        return JWTAuthStrategy.logout(self.passbolt_account, self.auth_credentials, verify = self.verify,
+                                      timeout = self.timeout)
 
     def get_resource(self) -> None:
         raise NotImplementedError()
