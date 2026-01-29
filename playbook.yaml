@@ -1,0 +1,10 @@
+---
+- hosts:
+  - localhost
+  gather_facts: no
+  collections:
+    - passbolt.passbolt_lookup
+  tasks:
+    - name: "Passbolt lookup demonstration"
+      debug:
+        msg: "{{ lookup('passbolt.passbolt_lookup.passbolt_lookup', 'uuid', skip_ssl_verification = true) }}"

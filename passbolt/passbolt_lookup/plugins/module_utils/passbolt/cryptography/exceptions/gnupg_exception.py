@@ -1,0 +1,3 @@
+
+class GnuPGException(Exception):
+    pass
