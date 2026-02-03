@@ -25,6 +25,8 @@ DOCUMENTATION = r"""
       default: 30
 """
 
+import uuid
+
 from ansible.errors import AnsibleError
 from ansible.plugins.lookup import LookupBase
 from ansible.utils.display import Display
@@ -33,17 +35,6 @@ from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.
     PassboltAPIClient
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.account.passbolt_account_kit_factory import \
     PassboltAccountKitFactory
-from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.exceptions.gnupg_exception import \
-    GnuPGException
-from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.account.exceptions.passbolt_account_kit_deserialization_exception import \
-    PassboltAccountKitDeserializationException
-from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.api.exceptions.api_format_exception import \
-    APIFormatException
-from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.exceptions.authentication_exception import \
-    AuthenticationException
-from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.api.exceptions.resource_exceptions import (
-    ResourceException,
-)
 
 display = Display()
 
@@ -69,19 +60,22 @@ class LookupModule(LookupBase):
 
         display.vvvv(u"Skipping SSL validation is set to '%s'." % self.get_option('skip_ssl_verification'))
         try:
-            passbolt_account = PassboltAccountKitFactory.from_string(variables['passbolt'][self.ACCOUNT_KIT_OPTION_KEY],
-                                                                     variables['passbolt'][
-                                                                         self.ACCOUNT_PASSPHRASE_OPTION_KEY],
-                                                                     verify=not self.get_option(
-                                                                         'skip_ssl_verification'),
-                                                                     timeout=self.get_option('timeout'))
-            passbolt_api_client = PassboltAPIClient(passbolt_account,
-                                                    verify=not self.get_option('skip_ssl_verification'),
-                                                    timeout=self.get_option('timeout'))
+            passbolt_account = PassboltAccountKitFactory.from_string(
+                variables['passbolt'][self.ACCOUNT_KIT_OPTION_KEY],
+                variables['passbolt'][self.ACCOUNT_PASSPHRASE_OPTION_KEY],
+                verify=not self.get_option('skip_ssl_verification'),
+                timeout=self.get_option('timeout')
+            )
+            passbolt_api_client = PassboltAPIClient(
+                passbolt_account,
+                verify=not self.get_option('skip_ssl_verification'),
+                timeout=self.get_option('timeout')
+            )
+
             if passbolt_api_client.login():
                 display.vvvv('Logged in')
 
-            resource = passbolt_api_client.get_resource(resource_uuid)
+            resource = passbolt_api_client.get_resource(uuid.UUID(resource_uuid)).to_dict()
             display.vvvv('Resource retrieved successfully')
 
             if passbolt_api_client.logout():
@@ -89,17 +83,5 @@ class LookupModule(LookupBase):
 
             return [resource]
 
-        except GnuPGException as e:
-            raise AnsibleError("A GnuPG exception occurred: '%s'" % e)
-        except APIFormatException as e:
-            raise AnsibleError("There was a problem with what the API returned: '%s'" % e)
-        except AuthenticationException as e:
-            raise AnsibleError("There was a problem when authenticating with the API: '%s'" % e)
-        except PassboltAccountKitDeserializationException as e:
-            raise AnsibleError("There was a problem when deserializing the Passbolt account kit: '%s'" % e)
-        except ResourceException as e:
-            raise AnsibleError("There was a problem when retrieving the resource: '%s'" % e)
         except Exception as e:
-            raise AnsibleError("An unknown exception occurred: '%s'" % e)
-
-        return []
+            raise AnsibleError("Passbolt lookup failed: %s" % e)

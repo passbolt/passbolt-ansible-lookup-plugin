@@ -23,54 +23,30 @@ The lookup returns a dictionary with two sections:
 
 ```json
   {
-    "metadata": {
-        "custom_fields": [
-            {
-                "id": "1834f12f-2a0e-4bad-83c7-9a7c5c1260bb",
-                "metadata_key": "A custom key",
-                "type": "text"
-            },
-            {
-                "id": "b0f7f950-9535-449e-a8a4-0972ebcc0e17",
-                "metadata_key": "Another custom key",
-                "type": "text"
-            }
-        ],
-        "description": "An unencrypted description if it exists",
-        "icon": {
-            "background_color": "#FFE144",
-            "type": "keepass-icon-set",
-            "value": 9
-        },
-        "name": "The name of the resource",
-        "uris": [
-            "https://urlX.com",
-            "https://urlY.com"
-        ],
-        "username": "YOUR_USERNAME"
-    },
-    "secret": {
-        "custom_fields": [
-            {
-                "id": "1834f12f-2a0e-4bad-83c7-9a7c5c1260bb",
-                "secret_value": "The secret value for custom fields",
-                "type": "text"
-            },
-            {
-                "id": "b0f7f950-9535-449e-a8a4-0972ebcc0e17",
-                "secret_value": "A second secret value for custom fields",
-                "type": "text"
-            }
-        ],
-        "description": "The secure note if it exists",
-        "password": "The super secret password",
-        "totp": {
-            "algorithm": "SHA1",
-            "digits": 6,
-            "period": 30,
-            "secret_key": "The TOTP secret key"
-        }
-    }
+      "custom_fields": {
+        "a key": "a value (secret)",
+        "another key": "another value (secret)"
+      },
+  "description": "a searchable desc",
+      "icon": {
+        "background_color": "#E88BA8",
+        "type": "keepass-icon-set",
+        "value": 10
+      },
+      "name": "a random password",
+      "note": "a secure note",
+      "password": "darkside",
+      "totp": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "secret_key": "JBSWY3DPEHPK3PXP"
+      },
+      "uris": [
+        "https://oneurl.com",
+        "https://anotherurl.com"
+      ],
+      "username": "anakin"
 }
 ```
 
@@ -94,25 +70,8 @@ The lookup returns a dictionary with two sections:
 
 ### Supported Features
 
-- **API v5 Metadata Encryption**: Supports both `user_key` and `shared_key` metadata encryption types
-- **TOTP**: Returns TOTP configuration if present (secret_key, algorithm, digits, period)
+- **API v5 Metadata Encryption**: Supports both shared and personal metadata-encrypted resources
 - **Custom Fields**: Supports custom fields in both metadata and secret sections
-
-### Error Handling
-
-The plugin raises specific exceptions for different error scenarios:
-
-| Exception              | Description                                              |
-|------------------------|----------------------------------------------------------|
-| `InvalidResourceId`    | The provided UUID is not a valid UUIDv4 format           |
-| `ResourceNotFound`     | Resource doesn't exist or user lacks access (404/401/403)|
-| `ResourceDeleted`      | The resource has been soft-deleted                       |
-| `SecretShareMissing`   | No secret share found for the authenticated user         |
-| `MetadataMissing`      | Resource has no encrypted metadata                       |
-| `MetadataKeyNotShared` | Shared metadata key is not accessible by the user        |
-| `DecryptError`         | Failed to decrypt metadata or secret (wrong key/corrupt) |
-| `SchemaValidationError`| Decrypted data doesn't match expected JSON schema        |
-| `IntegrityError`       | Response ID doesn't match requested resource ID          |
 
 ## Development
 

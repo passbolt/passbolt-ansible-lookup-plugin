@@ -1,82 +1,131 @@
 from dataclasses import dataclass, field
-from typing import Optional, Any
+from typing import Optional
+import uuid
+
+from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.entities.passbolt_encrypted_metadata_entity import PassboltEncryptedMetadataEntity
+from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.entities.metadata_key import MetadataKey
 
 
 @dataclass
-class PassboltResourceIcon:
-    url: Optional[str] = None
-    hash: Optional[str] = None
+class PassboltResourceType:
+    id: str
+    slug: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    deleted: bool = False
+    created: Optional[str] = None
+    modified: Optional[str] = None
 
 
 @dataclass
-class PassboltResource:
-    name: str
+class PassboltResource(PassboltEncryptedMetadataEntity):
+    id: Optional[uuid.UUID] = None
+    name: Optional[str] = None
     username: Optional[str] = None
     description: Optional[str] = None
-    uris: list[str] = field(default_factory=list)
-    icon: Optional[dict] = None
-    metadata_custom_fields: list[dict] = field(default_factory=list)
+    note: Optional[str] = None
     password: Optional[str] = None
-    secret_description: Optional[str] = None
+    uris: list[str] = field(default_factory=list)
+    custom_fields: dict[str, str] = field(default_factory=dict)
+    resource_type: Optional[PassboltResourceType] = None
+    metadata_key: Optional[MetadataKey] = None
+    icon: Optional[dict] = None
     totp: Optional[dict] = None
-    secret_custom_fields: list[dict] = field(default_factory=list)
-    resource_id: Optional[str] = None
-    resource_type_id: Optional[str] = None
+
+    def is_shared(self) -> bool:
+        return self.metadata_key.is_shared_key() if self.metadata_key else False
 
     def to_dict(self) -> dict:
-        return {
-            "metadata": {
-                "name": self.name,
-                "username": self.username,
-                "description": self.description,
-                "uris": self.uris,
-                "icon": self.icon,
-                "custom_fields": self.metadata_custom_fields,
-            },
-            "secret": {
-                "password": self.password,
-                "description": self.secret_description,
-                "totp": self.totp,
-                "custom_fields": self.secret_custom_fields,
-            }
-        }
+        """Return human-focused dictionary representation, omitting null/empty fields."""
+        result = {}
+
+        if self.name:
+            result["name"] = self.name
+        if self.username:
+            result["username"] = self.username
+        if self.password:
+            result["password"] = self.password
+        if self.description:
+            result["description"] = self.description
+        if self.note:
+            result["note"] = self.note
+        if self.uris:
+            result["uris"] = self.uris
+        if self.totp:
+            result["totp"] = self.totp
+        if self.custom_fields:
+            result["custom_fields"] = self.custom_fields
+
+        return result
 
     @classmethod
-    def from_decrypted_data(
+    def from_api_json(
         cls,
-        metadata: dict,
-        secret: dict,
-        resource_id: str,
-        resource_type_id: Optional[str] = None
+        data: dict,
+        decrypted_metadata: dict,
+        decrypted_secret: Optional[dict] = None,
     ) -> "PassboltResource":
-        name = metadata.get("name", "")
-        uris = metadata.get("uris", [])
-        if not uris and "uri" in metadata:
-            uri = metadata.get("uri")
+        """Create resource from API JSON response with decrypted metadata and secret."""
+        resource_id = data.get("id")
+        resource_type_id = data.get("resource_type_id")
+        metadata_key_id = data.get("metadata_key_id")
+        metadata_key_type = data.get("metadata_key_type")
+
+        name = decrypted_metadata.get("name")
+        uris = decrypted_metadata.get("uris", [])
+        if not uris and "uri" in decrypted_metadata:
+            uri = decrypted_metadata.get("uri")
             if uri:
                 uris = [uri]
 
-        username = metadata.get("username")
-        description = metadata.get("description")
-        icon = metadata.get("icon")
-        metadata_custom_fields = metadata.get("custom_fields", [])
+        username = decrypted_metadata.get("username")
+        description = decrypted_metadata.get("description")
+        icon = decrypted_metadata.get("icon")
 
-        password = secret.get("password")
-        secret_description = secret.get("description")
-        totp = secret.get("totp")
-        secret_custom_fields = secret.get("custom_fields", [])
+        password = None
+        note = None
+        totp = None
+        custom_fields = {}
+
+        if decrypted_secret:
+            password = decrypted_secret.get("password")
+            note = decrypted_secret.get("description")
+            totp = decrypted_secret.get("totp")
+
+            metadata_cf = decrypted_metadata.get("custom_fields") or []
+            secret_cf = decrypted_secret.get("custom_fields") or []
+            for meta_field in metadata_cf:
+                cf_id = meta_field.get("id")
+                cf_key = meta_field.get("metadata_key", cf_id)
+                cf_value = None
+                for secret_field in secret_cf:
+                    if secret_field.get("id") == cf_id:
+                        cf_value = secret_field.get("secret_value")
+                        break
+                custom_fields[cf_key] = cf_value
+
+        resource_type = None
+        if resource_type_id:
+            resource_type = PassboltResourceType(id=resource_type_id)
+
+        metadata_key = None
+        if metadata_key_id and metadata_key_type:
+            metadata_key = MetadataKey(
+                id=uuid.UUID(metadata_key_id),
+                type=metadata_key_type
+            )
 
         return cls(
+            id=uuid.UUID(resource_id) if resource_id else None,
             name=name,
             username=username,
             description=description,
-            uris=uris,
-            icon=icon,
-            metadata_custom_fields=metadata_custom_fields,
+            note=note,
             password=password,
-            secret_description=secret_description,
+            uris=uris,
+            custom_fields=custom_fields,
+            resource_type=resource_type,
+            metadata_key=metadata_key,
+            icon=icon,
             totp=totp,
-            secret_custom_fields=secret_custom_fields,
-            resource_id=resource_id,
-            resource_type_id=resource_type_id
         )
