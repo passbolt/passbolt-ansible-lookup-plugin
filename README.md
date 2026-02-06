@@ -16,6 +16,40 @@ Once installed, the collection can be used in your playbook by adding it to its
 lookup('passbolt.passbolt_lookup.passbolt_lookup', '<resource UUID>')
 ```
 
+### Return format
+The lookup returns a dictionary with two sections:
+- metadata (decrypted public information)
+- secret (decrypted sensitive information)
+
+```json
+  {
+      "custom_fields": {
+        "a key": "a value (secret)",
+        "another key": "another value (secret)"
+      },
+  "description": "a searchable desc",
+      "icon": {
+        "background_color": "#E88BA8",
+        "type": "keepass-icon-set",
+        "value": 10
+      },
+      "name": "a random password",
+      "note": "a secure note",
+      "password": "darkside",
+      "totp": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "secret_key": "JBSWY3DPEHPK3PXP"
+      },
+      "uris": [
+        "https://oneurl.com",
+        "https://anotherurl.com"
+      ],
+      "username": "anakin"
+}
+```
+
 ### Options
 
 | Name                    | Mandatory? | Format  | Default | Description                                                           |
@@ -33,6 +67,11 @@ lookup('passbolt.passbolt_lookup.passbolt_lookup', '<resource UUID>')
 > ⚠️ Both of these variables are considered secrets and should be treated as such:
 > please avoid storing them unencrypted, please use [Ansible vault](https://docs.ansible.com/projects/ansible/latest/vault_guide/index.html)
 > or similar for storing those.
+
+### Supported Features
+
+- **API v5 Metadata Encryption**: Supports both shared and personal metadata-encrypted resources
+- **Custom Fields**: Supports custom fields in both metadata and secret sections
 
 ## Development
 
