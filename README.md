@@ -106,6 +106,17 @@ ansible-galaxy collection install ./passbolt
 A sample (and simple) [playbook](playbook.yaml) is provided for helping in
 testing the lookup plugin using a debug call.
 
+### Running Tests
+
+Unit tests can be run from the repository root without installing the collection:
+
+```bash
+python -m pytest tests/unit/ -v
+```
+
+Tests use `unittest.mock` to mock HTTP and GnuPG dependencies, so no Passbolt
+server or GPG keyring is required.
+
 ## Copyright & License
 
 (c) 2025 Passbolt SA
