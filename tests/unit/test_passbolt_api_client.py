@@ -12,6 +12,12 @@ from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.auth_credentials import (
     AuthCredentials,
 )
+from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.exceptions.authentication_exception import (
+    AuthenticationException,
+)
+from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.jwt_credentials import (
+    JWTCredentials,
+)
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.passbolt_api_client import (
     PassboltAPIClient,
 )
@@ -37,6 +43,7 @@ DECRYPTED_SECRET = {
 _PATCH_HTTP = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.http.http_client_service.HTTPClientService.send"
 _PATCH_DECRYPT = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.decrypt"
 _PATCH_IMPORT_KEY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.import_key"
+_PATCH_JWT_LOGIN = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.jwt_auth_strategy.JWTAuthStrategy.login"
 
 
 def _make_api_response(status_code, body, success=True):
@@ -234,6 +241,31 @@ class TestDecryptSecret(unittest.TestCase):
 
         self.assertIsNone(result)
         mock_decrypt.assert_not_called()
+
+
+class TestLogin(unittest.TestCase):
+
+    @patch(_PATCH_JWT_LOGIN)
+    def test_success_returns_true_and_stores_credentials(self, mock_jwt_login):
+        mock_credentials = JWTCredentials("access-token", "refresh-token")
+        mock_jwt_login.return_value = mock_credentials
+
+        client = _make_client()
+        client.auth_credentials = None
+        result = client.login()
+
+        self.assertTrue(result)
+        self.assertIs(client.auth_credentials, mock_credentials)
+
+    @patch(_PATCH_JWT_LOGIN)
+    def test_propagates_authentication_exception(self, mock_jwt_login):
+        mock_jwt_login.side_effect = AuthenticationException("auth failed")
+
+        client = _make_client()
+        client.auth_credentials = None
+
+        with self.assertRaises(AuthenticationException):
+            client.login()
 
 
 class TestGetResource(unittest.TestCase):
