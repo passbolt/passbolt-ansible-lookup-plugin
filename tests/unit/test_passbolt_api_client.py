@@ -25,6 +25,8 @@ from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.
 # --- Constants ---
 
 USER_ID = "u1u2u3u4-5555-6666-7777-888888888888"
+USER_KEY_FINGERPRINT = "AABBCCDD"
+SERVER_KEY_FINGERPRINT = "EEFF0011"
 RESOURCE_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 RESOURCE_UUID = uuid.UUID(RESOURCE_ID)
 PASSPHRASE = "testpass"
@@ -57,11 +59,11 @@ def _make_api_response(status_code, body, success=True):
 def _make_client():
     account = PassboltAccount(
         id=USER_ID,
-        key_id="AABBCCDD",
+        key_id=USER_KEY_FINGERPRINT,
         email="test@example.com",
         passphrase=PASSPHRASE,
         fullbase_url="https://passbolt.local/",
-        server_key_id="EEFF0011",
+        server_key_id=SERVER_KEY_FINGERPRINT,
     )
     client = PassboltAPIClient(account, verify=False, timeout=5)
     client.auth_credentials = MagicMock(spec=AuthCredentials)
@@ -124,9 +126,7 @@ class TestDecryptMetadata(unittest.TestCase):
 
         result = client._decrypt_metadata(resource_body)
 
-        mock_decrypt.assert_called_once_with(
-            resource_body["metadata"], PASSPHRASE
-        )
+        mock_decrypt.assert_called_once_with(resource_body["metadata"], PASSPHRASE, USER_KEY_FINGERPRINT)
         self.assertEqual(result, DECRYPTED_METADATA)
 
     @patch(_PATCH_IMPORT_KEY)
@@ -141,6 +141,7 @@ class TestDecryptMetadata(unittest.TestCase):
             json.dumps({"armored_key": "-----BEGIN PGP PRIVATE KEY-----\nfake\n-----END PGP PRIVATE KEY-----"}),
             json.dumps(DECRYPTED_METADATA),
         ]
+        mock_import_key.return_value = ["AAAAAAAA", "AAAAAAAA"]
 
         # HTTPClientService.send returns metadata keys list
         metadata_keys_body = [
@@ -169,6 +170,48 @@ class TestDecryptMetadata(unittest.TestCase):
         self.assertEqual(result, DECRYPTED_METADATA)
         # Second decrypt call should use passphrase=None (shared key already imported)
         self.assertIsNone(mock_decrypt.call_args_list[1][0][1])
+        mock_import_key.assert_called_once()
+
+    @patch(_PATCH_IMPORT_KEY)
+    @patch(_PATCH_DECRYPT)
+    @patch(_PATCH_HTTP)
+    def test_shared_key_mismatched_fingerprints(self, mock_send, mock_decrypt, mock_import_key):
+        metadata_key_id = "mk-1111-2222-3333-444444444444"
+
+        # First decrypt call: decrypting the metadata private key data
+        # Second decrypt call: decrypting the actual metadata
+        mock_decrypt.side_effect = [
+            json.dumps({"armored_key": "-----BEGIN PGP PRIVATE KEY-----\nfake\n-----END PGP PRIVATE KEY-----"}),
+            json.dumps(DECRYPTED_METADATA),
+        ]
+        mock_import_key.return_value = ["AAAAAAAA", "BBBBBBBB"]
+
+        # HTTPClientService.send returns metadata keys list
+        metadata_keys_body = [
+            {
+                "id": metadata_key_id,
+                "metadata_private_keys": [
+                    {
+                        "user_id": USER_ID,
+                        "metadata_key_id": metadata_key_id,
+                        "data": "encrypted-private-key-data",
+                    }
+                ],
+            }
+        ]
+        mock_send.return_value = _make_api_response(200, metadata_keys_body)
+
+        client = _make_client()
+        resource_body = {
+            "metadata": "encrypted-metadata",
+            "metadata_key_type": "shared_key",
+            "metadata_key_id": metadata_key_id,
+        }
+
+        with self.assertRaises(RuntimeError) as ctx:
+            client._decrypt_metadata(resource_body)
+        self.assertIn("expected metadata public and private key fingerprint to match",
+                      str(ctx.exception).lower())
         mock_import_key.assert_called_once()
 
     @patch(_PATCH_DECRYPT)

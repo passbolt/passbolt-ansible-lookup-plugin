@@ -22,7 +22,7 @@ class PassboltAPIClient:
         self.verify = verify
         self.timeout = timeout
         self.auth_credentials: Optional[AuthCredentials] = None
-        self._metadata_key_cache: dict[str, Optional[str]] = {}
+        self._metadata_key_cache: dict[str, str] = {}
 
     def login(self) -> bool:
         auth_credentials = JWTAuthStrategy.login(
@@ -100,69 +100,76 @@ class PassboltAPIClient:
 
         if metadata_key_type == self.METADATA_KEY_TYPE_USER:
             decryption_passphrase = self.passbolt_account.passphrase
+            metadata_key_fingerprint = self.passbolt_account.key_id
         elif metadata_key_type == self.METADATA_KEY_TYPE_SHARED:
             metadata_key_id = resource_body.get("metadata_key_id")
             if not metadata_key_id:
                 raise ValueError("Resource uses shared_key but metadata_key_id is missing.")
-            self._import_metadata_private_key(metadata_key_id)
+            metadata_key_fingerprint = self._import_metadata_private_key(metadata_key_id)
             decryption_passphrase = None
         else:
             raise ValueError(f"Invalid metadata_key_type: '{metadata_key_type}'")
 
-        decrypted_json = GnuPGService.decrypt(encrypted_metadata, decryption_passphrase)
+        decrypted_json = GnuPGService.decrypt(encrypted_metadata, decryption_passphrase, metadata_key_fingerprint)
         return json.loads(decrypted_json)
 
-    def _import_metadata_private_key(self, metadata_key_id: str) -> None:
-        if metadata_key_id in self._metadata_key_cache:
-            return
-
-        url = urljoin(
-            self.passbolt_account.fullbase_url,
-            "metadata/keys.json?contain[metadata_private_keys]=1"
-        )
-
-        api_request = APIRequest(
-            HTTPMethod.GET,
-            url,
-            auth_credentials=self.auth_credentials,
-            verify=self.verify,
-            timeout=self.timeout
-        )
-        api_response = HTTPClientService.send(api_request)
-
-        if not api_response.is_success():
-            raise RuntimeError(f"Failed to fetch metadata keys. HTTP {api_response.http_status_code}")
-
-        metadata_keys = api_response.body or []
-
-        user_private_key_data = None
-        for mk in metadata_keys:
-            if mk.get("id") == metadata_key_id:
-                private_keys = mk.get("metadata_private_keys", [])
-                for pk in private_keys:
-                    if (pk.get("user_id") == self.passbolt_account.id and
-                        pk.get("metadata_key_id") == metadata_key_id):
-                        user_private_key_data = pk.get("data")
-                        break
-                break
-
-        if not user_private_key_data:
-            raise LookupError(
-                f"Metadata key '{metadata_key_id}' is not shared with user."
+    def _import_metadata_private_key(self, metadata_key_id: str) -> str:
+        if metadata_key_id not in self._metadata_key_cache:
+            url = urljoin(
+                self.passbolt_account.fullbase_url,
+                "metadata/keys.json?contain[metadata_private_keys]=1"
             )
 
-        decrypted_json = GnuPGService.decrypt(
-            user_private_key_data,
-            self.passbolt_account.passphrase
-        )
+            api_request = APIRequest(
+                HTTPMethod.GET,
+                url,
+                auth_credentials=self.auth_credentials,
+                verify=self.verify,
+                timeout=self.timeout
+            )
+            api_response = HTTPClientService.send(api_request)
 
-        key_data = json.loads(decrypted_json)
-        armored_key = key_data.get("armored_key")
-        if not armored_key:
-            raise ValueError("Decrypted metadata key missing 'armored_key' field.")
+            if not api_response.is_success():
+                raise RuntimeError(f"Failed to fetch metadata keys. HTTP {api_response.http_status_code}")
 
-        GnuPGService.import_key(armored_key, None)
-        self._metadata_key_cache[metadata_key_id] = None
+            metadata_keys = api_response.body or []
+
+            user_private_key_data = None
+            for mk in metadata_keys:
+                if mk.get("id") == metadata_key_id:
+                    private_keys = mk.get("metadata_private_keys", [])
+                    for pk in private_keys:
+                        if (pk.get("user_id") == self.passbolt_account.id and
+                            pk.get("metadata_key_id") == metadata_key_id):
+                            user_private_key_data = pk.get("data")
+                            break
+                    break
+
+            if not user_private_key_data:
+                raise LookupError(
+                    f"Metadata key '{metadata_key_id}' is not shared with user."
+                )
+
+            decrypted_json = GnuPGService.decrypt(
+                user_private_key_data,
+                self.passbolt_account.passphrase,
+                self.passbolt_account.key_id
+            )
+
+            key_data = json.loads(decrypted_json)
+            armored_key = key_data.get("armored_key")
+            if not armored_key:
+                raise ValueError("Decrypted metadata key missing 'armored_key' field.")
+
+            metadata_key_fingerprints = GnuPGService.import_key(armored_key, None)
+            if len(metadata_key_fingerprints) != 2:
+                raise RuntimeError("Expected 2 keys to be imported when importing metadata key, got %s" %
+                                   len(metadata_key_fingerprints))
+            if metadata_key_fingerprints[0] != metadata_key_fingerprints[1]:
+                raise RuntimeError("Expected metadata public and private key fingerprint to match but didn't.")
+
+            self._metadata_key_cache[metadata_key_id] = metadata_key_fingerprints[0]
+        return self._metadata_key_cache[metadata_key_id]
 
     def _decrypt_secret(self, resource_body: dict) -> Optional[dict]:
         secrets = resource_body.get("secrets", [])

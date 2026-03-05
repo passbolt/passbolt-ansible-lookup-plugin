@@ -22,12 +22,15 @@ from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.
 # --- Constants ---
 
 USER_ID = "u1u2u3u4-5555-6666-7777-888888888888"
+USER_KEY_FINGERPRINT = "AABBCCDD"
 PASSPHRASE = "testpass"
+SERVER_KEY_FINGERPRINT = "EEFF0011"
 VERIFY_TOKEN = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 ACCESS_TOKEN = "access-token-value"
 REFRESH_TOKEN = "ffffffff-0000-1111-2222-333333333333"
 FIXED_TIME = 1_000_000.0
 TOKEN_EXPIRY = int(FIXED_TIME + JWTAuthStrategy.VERIFY_TOKEN_LIFETIME_SECONDS)
+ENCRYPTED_CHALLENGE = "encrypted-challenge-response"
 
 _PATCH_HTTP = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.http.http_client_service.HTTPClientService.send"
 _PATCH_ENCRYPT = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.encrypt"
@@ -39,11 +42,11 @@ _PATCH_TIME = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils
 def _make_passbolt_account():
     return PassboltAccount(
         id=USER_ID,
-        key_id="AABBCCDD",
+        key_id=USER_KEY_FINGERPRINT,
         email="test@example.com",
         passphrase=PASSPHRASE,
         fullbase_url="https://passbolt.local/",
-        server_key_id="EEFF0011",
+        server_key_id=SERVER_KEY_FINGERPRINT,
     )
 
 
@@ -53,7 +56,7 @@ def _make_login_response(servertime, success=True):
             "status": "success" if success else "error",
             "servertime": servertime,
         },
-        "body": {"challenge": "encrypted-challenge-response"},
+        "body": {"challenge": ENCRYPTED_CHALLENGE},
     }
     status_code = 200 if success else 400
     return APIResponse(status_code, {"Content-Type": "application/json"}, content)
@@ -85,6 +88,7 @@ class TestJWTAuthStrategyLogin(unittest.TestCase):
 
         result = JWTAuthStrategy.login(_make_passbolt_account())
 
+        mock_decrypt.assert_called_once_with(ENCRYPTED_CHALLENGE, PASSPHRASE, SERVER_KEY_FINGERPRINT)
         self.assertIsInstance(result, JWTCredentials)
         self.assertEqual(result.access_token, ACCESS_TOKEN)
         self.assertEqual(result.refresh_token, REFRESH_TOKEN)

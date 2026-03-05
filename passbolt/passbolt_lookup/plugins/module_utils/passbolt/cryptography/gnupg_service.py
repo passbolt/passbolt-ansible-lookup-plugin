@@ -9,13 +9,18 @@ class GnuPGService:
 
     @classmethod
     def import_key(cls, armored_key: str, passphrase: str = None) -> str:
-        return cls.GPG.import_keys(armored_key, passphrase=passphrase).fingerprints
+        imported_fingerprints = cls.GPG.import_keys(armored_key, passphrase=passphrase).fingerprints
+        if None in imported_fingerprints:
+            raise GnuPGException("One or more imported fingerprints were null.")
+        return imported_fingerprints
 
     @classmethod
-    def decrypt(cls, data: str, passphrase: str) -> str:
+    def decrypt(cls, data: str, passphrase: str, sign_key_fingerprint: str | None = None) -> str:
         decrypted = cls.GPG.decrypt(data, passphrase=passphrase)
         if not decrypted.ok:
             raise GnuPGException("Couldn't decrypt data: '%s'." % decrypted.status)
+        if sign_key_fingerprint is not None and decrypted.fingerprint != sign_key_fingerprint:
+            raise GnuPGException("Couldn't verify decrypted data.")
         return decrypted.data.decode('utf-8')
 
     @classmethod
@@ -37,6 +42,6 @@ class GnuPGService:
     @classmethod
     def verify(cls, data: str, key_id: str) -> str:
         verified = cls.GPG.verify(data, extra_args=['-o', '-'])
-        if key_id is not None and verified.fingerprint != key_id:
+        if key_id is not None and (not verified or verified.fingerprint != key_id):
             raise GnuPGException("Couldn't verify data.")
         return verified.data

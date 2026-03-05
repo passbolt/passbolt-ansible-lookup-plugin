@@ -80,7 +80,8 @@ class JWTAuthStrategy(AuthStrategy):
             raise AuthenticationException("The verification token sent to the server expired.")
 
         decrypted_challenge = json.loads(
-            GnuPGService.decrypt(api_response.body["challenge"], passbolt_account.passphrase))
+            GnuPGService.decrypt(api_response.body["challenge"], passbolt_account.passphrase,
+                                 passbolt_account.server_key_id))
         try:
             jsonschema.validate(decrypted_challenge, cls.DECRYPTED_CHALLENGE_RESPONSE_SCHEMA)
         except jsonschema.ValidationError:
