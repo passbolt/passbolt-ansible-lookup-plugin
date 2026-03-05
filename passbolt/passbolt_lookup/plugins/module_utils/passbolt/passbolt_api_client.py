@@ -1,4 +1,5 @@
 import json
+import jsonschema
 from http import HTTPMethod
 from typing import Optional
 from urllib.parse import urljoin
@@ -16,6 +17,38 @@ from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.
 class PassboltAPIClient:
     METADATA_KEY_TYPE_USER = "user_key"
     METADATA_KEY_TYPE_SHARED = "shared_key"
+    USER_RESPONSE_SCHEMA = {
+        "type": "object",
+        "required": [
+            "id",
+            "active",
+            "gpgkey"
+        ],
+        "properties": {
+            "id": {
+                "type": "string",
+                "format": "uuid",
+            },
+            "active": {
+                "type": "boolean",
+            },
+            "gpgkey": {
+                "type": "object",
+                "required": [
+                    "armored_key",
+                    "fingerprint",
+                ],
+                "properties": {
+                    "armored_key": {
+                        "type": "string",
+                    },
+                    "fingerprint": {
+                        "type": "string",
+                    }
+                }
+            },
+        },
+    }
 
     def __init__(self, passbolt_account: PassboltAccount, verify: bool = True, timeout: int = 30):
         self.passbolt_account = passbolt_account
@@ -110,7 +143,8 @@ class PassboltAPIClient:
         else:
             raise ValueError(f"Invalid metadata_key_type: '{metadata_key_type}'")
 
-        decrypted_json = GnuPGService.decrypt(encrypted_metadata, decryption_passphrase, metadata_key_fingerprint)
+        decrypted_json = GnuPGService.decrypt_and_verify(encrypted_metadata, decryption_passphrase,
+                                                         metadata_key_fingerprint)
         return json.loads(decrypted_json)
 
     def _import_metadata_private_key(self, metadata_key_id: str) -> str:
@@ -150,7 +184,7 @@ class PassboltAPIClient:
                     f"Metadata key '{metadata_key_id}' is not shared with user."
                 )
 
-            decrypted_json = GnuPGService.decrypt(
+            decrypted_json = GnuPGService.decrypt_and_verify(
                 user_private_key_data,
                 self.passbolt_account.passphrase,
                 self.passbolt_account.key_id
@@ -173,7 +207,6 @@ class PassboltAPIClient:
 
     def _decrypt_secret(self, resource_body: dict) -> Optional[dict]:
         secrets = resource_body.get("secrets", [])
-
         if not secrets:
             return None
 
@@ -190,9 +223,48 @@ class PassboltAPIClient:
         if not encrypted_secret:
             return None
 
-        decrypted_json = GnuPGService.decrypt(
+        if resource_body.get("personal"):
+            secret_signature_fingerprint = self.passbolt_account.key_id
+        else:
+            modified_id = uuid.UUID(resource_body.get("modified_by", ""))
+            url = urljoin(
+                self.passbolt_account.fullbase_url,
+                f"users/{modified_id}.json"
+            )
+
+            api_request = APIRequest(
+                HTTPMethod.GET,
+                url,
+                auth_credentials=self.auth_credentials,
+                verify=self.verify,
+                timeout=self.timeout
+            )
+            api_response = HTTPClientService.send(api_request)
+
+            if not api_response.is_success():
+                raise RuntimeError(f"Failed to fetch resource modifier. HTTP {api_response.http_status_code}")
+            user = api_response.body
+            try:
+                jsonschema.validate(user, self.USER_RESPONSE_SCHEMA)
+            except jsonschema.ValidationError:
+                raise ValueError("User schema validation failed.")
+
+            if not user.get("active"):
+                raise RuntimeError("User is not active.")
+
+            user_gpg_key = user.get("gpgkey")
+            imported_modifier_key_fingerprints = GnuPGService.import_key(user_gpg_key.get("armored_key"), None)
+            if len(imported_modifier_key_fingerprints) != 1:
+                raise RuntimeError("Expected 1 key to be imported when importing modifier key, got %s"
+                                   % len(imported_modifier_key_fingerprints))
+            if user_gpg_key.get("fingerprint") != imported_modifier_key_fingerprints[0]:
+                raise RuntimeError("Modifier key fingerprint does not match imported fingerprint.")
+            secret_signature_fingerprint = user_gpg_key.get("fingerprint")
+
+        decrypted_json = GnuPGService.decrypt_and_verify(
             encrypted_secret,
-            self.passbolt_account.passphrase
+            self.passbolt_account.passphrase,
+            secret_signature_fingerprint
         )
 
         return json.loads(decrypted_json)

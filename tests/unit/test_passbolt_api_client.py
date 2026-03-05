@@ -24,7 +24,9 @@ from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.
 
 # --- Constants ---
 
-USER_ID = "u1u2u3u4-5555-6666-7777-888888888888"
+USER_ID = "e1f2e3f4-5555-6666-7777-888888888888"
+OTHER_USER_ID = "a1b2c3d4-9999-0000-4444-012012012012"
+OTHER_USER_KEY_FINGERPRINT = "AABBAABB"
 USER_KEY_FINGERPRINT = "AABBCCDD"
 SERVER_KEY_FINGERPRINT = "EEFF0011"
 RESOURCE_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
@@ -43,7 +45,7 @@ DECRYPTED_SECRET = {
 }
 
 _PATCH_HTTP = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.http.http_client_service.HTTPClientService.send"
-_PATCH_DECRYPT = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.decrypt"
+_PATCH_DECRYPT_AND_VERIFY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.decrypt_and_verify"
 _PATCH_IMPORT_KEY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.import_key"
 _PATCH_JWT_LOGIN = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.jwt_auth_strategy.JWTAuthStrategy.login"
 
@@ -114,9 +116,9 @@ class TestFetchResource(unittest.TestCase):
 
 class TestDecryptMetadata(unittest.TestCase):
 
-    @patch(_PATCH_DECRYPT)
-    def test_user_key(self, mock_decrypt):
-        mock_decrypt.return_value = json.dumps(DECRYPTED_METADATA)
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    def test_user_key(self, mock_decrypt_and_verify):
+        mock_decrypt_and_verify.return_value = json.dumps(DECRYPTED_METADATA)
 
         client = _make_client()
         resource_body = {
@@ -126,18 +128,18 @@ class TestDecryptMetadata(unittest.TestCase):
 
         result = client._decrypt_metadata(resource_body)
 
-        mock_decrypt.assert_called_once_with(resource_body["metadata"], PASSPHRASE, USER_KEY_FINGERPRINT)
+        mock_decrypt_and_verify.assert_called_once_with(resource_body["metadata"], PASSPHRASE, USER_KEY_FINGERPRINT)
         self.assertEqual(result, DECRYPTED_METADATA)
 
     @patch(_PATCH_IMPORT_KEY)
-    @patch(_PATCH_DECRYPT)
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
     @patch(_PATCH_HTTP)
-    def test_shared_key(self, mock_send, mock_decrypt, mock_import_key):
+    def test_shared_key(self, mock_send, mock_decrypt_and_verify, mock_import_key):
         metadata_key_id = "mk-1111-2222-3333-444444444444"
 
         # First decrypt call: decrypting the metadata private key data
         # Second decrypt call: decrypting the actual metadata
-        mock_decrypt.side_effect = [
+        mock_decrypt_and_verify.side_effect = [
             json.dumps({"armored_key": "-----BEGIN PGP PRIVATE KEY-----\nfake\n-----END PGP PRIVATE KEY-----"}),
             json.dumps(DECRYPTED_METADATA),
         ]
@@ -169,18 +171,18 @@ class TestDecryptMetadata(unittest.TestCase):
 
         self.assertEqual(result, DECRYPTED_METADATA)
         # Second decrypt call should use passphrase=None (shared key already imported)
-        self.assertIsNone(mock_decrypt.call_args_list[1][0][1])
+        self.assertIsNone(mock_decrypt_and_verify.call_args_list[1][0][1])
         mock_import_key.assert_called_once()
 
     @patch(_PATCH_IMPORT_KEY)
-    @patch(_PATCH_DECRYPT)
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
     @patch(_PATCH_HTTP)
-    def test_shared_key_mismatched_fingerprints(self, mock_send, mock_decrypt, mock_import_key):
+    def test_shared_key_mismatched_fingerprints(self, mock_send, mock_decrypt_and_verify, mock_import_key):
         metadata_key_id = "mk-1111-2222-3333-444444444444"
 
         # First decrypt call: decrypting the metadata private key data
         # Second decrypt call: decrypting the actual metadata
-        mock_decrypt.side_effect = [
+        mock_decrypt_and_verify.side_effect = [
             json.dumps({"armored_key": "-----BEGIN PGP PRIVATE KEY-----\nfake\n-----END PGP PRIVATE KEY-----"}),
             json.dumps(DECRYPTED_METADATA),
         ]
@@ -214,18 +216,18 @@ class TestDecryptMetadata(unittest.TestCase):
                       str(ctx.exception).lower())
         mock_import_key.assert_called_once()
 
-    @patch(_PATCH_DECRYPT)
-    def test_missing_metadata_raises(self, mock_decrypt):
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    def test_missing_metadata_raises(self, mock_decrypt_and_verify):
         client = _make_client()
 
         with self.assertRaises(ValueError) as ctx:
             client._decrypt_metadata({"metadata_key_type": "user_key"})
 
         self.assertIn("no encrypted metadata", str(ctx.exception).lower())
-        mock_decrypt.assert_not_called()
+        mock_decrypt_and_verify.assert_not_called()
 
-    @patch(_PATCH_DECRYPT)
-    def test_invalid_type_raises(self, mock_decrypt):
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    def test_invalid_type_raises(self, mock_decrypt_and_verify):
         client = _make_client()
         resource_body = {
             "metadata": "some-data",
@@ -236,17 +238,19 @@ class TestDecryptMetadata(unittest.TestCase):
             client._decrypt_metadata(resource_body)
 
         self.assertIn("bogus", str(ctx.exception))
-        mock_decrypt.assert_not_called()
+        mock_decrypt_and_verify.assert_not_called()
 
 
 class TestDecryptSecret(unittest.TestCase):
 
-    @patch(_PATCH_DECRYPT)
-    def test_success(self, mock_decrypt):
-        mock_decrypt.return_value = json.dumps(DECRYPTED_SECRET)
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    def test_success_personal_resource(self, mock_decrypt_and_verify):
+        mock_decrypt_and_verify.return_value = json.dumps(DECRYPTED_SECRET)
 
         client = _make_client()
         resource_body = {
+            "modified_by": USER_ID,
+            "personal": True,
             "secrets": [
                 {
                     "user_id": USER_ID,
@@ -258,23 +262,56 @@ class TestDecryptSecret(unittest.TestCase):
         result = client._decrypt_secret(resource_body)
 
         self.assertEqual(result, DECRYPTED_SECRET)
-        mock_decrypt.assert_called_once_with("encrypted-secret-data", PASSPHRASE)
+        mock_decrypt_and_verify.assert_called_once_with("encrypted-secret-data", PASSPHRASE, USER_KEY_FINGERPRINT)
 
-    @patch(_PATCH_DECRYPT)
-    def test_no_secrets_returns_none(self, mock_decrypt):
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    @patch(_PATCH_IMPORT_KEY)
+    @patch(_PATCH_HTTP)
+    def test_success_shared_resource(self, mock_send, mock_import, mock_decrypt_and_verify):
+        mock_import.return_value = [OTHER_USER_KEY_FINGERPRINT]
+        mock_decrypt_and_verify.return_value = json.dumps(DECRYPTED_SECRET)
+        user_body = {
+            "id": OTHER_USER_ID,
+            "active": True,
+            "gpgkey": {
+                "fingerprint": OTHER_USER_KEY_FINGERPRINT,
+                "armored_key": "-----BEGIN PGP PRIVATE KEY-----\nis this real life\n-----END PGP PRIVATE KEY-----"
+            }
+        }
+        mock_send.return_value = _make_api_response(200, user_body)
+
+        client = _make_client()
+        resource_body = {
+            "modified_by": OTHER_USER_ID,
+            "personal": False,
+            "secrets": [
+                {
+                    "user_id": USER_ID,
+                    "data": "encrypted-secret-data",
+                }
+            ]
+        }
+        result = client._decrypt_secret(resource_body)
+
+        self.assertEqual(result, DECRYPTED_SECRET)
+        mock_import.assert_called_once_with("-----BEGIN PGP PRIVATE KEY-----\nis this real life\n-----END PGP PRIVATE KEY-----", None)
+        mock_decrypt_and_verify.assert_called_once_with("encrypted-secret-data", PASSPHRASE, OTHER_USER_KEY_FINGERPRINT)
+
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    def test_no_secrets_returns_none(self, mock_decrypt_and_verify):
         client = _make_client()
         result = client._decrypt_secret({"secrets": []})
 
         self.assertIsNone(result)
-        mock_decrypt.assert_not_called()
+        mock_decrypt_and_verify.assert_not_called()
 
-    @patch(_PATCH_DECRYPT)
-    def test_no_matching_user_returns_none(self, mock_decrypt):
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    def test_no_matching_user_returns_none(self, mock_decrypt_and_verify):
         client = _make_client()
         resource_body = {
             "secrets": [
                 {
-                    "user_id": "other-user-id",
+                    "user_id": OTHER_USER_ID,
                     "data": "encrypted",
                 }
             ]
@@ -283,7 +320,7 @@ class TestDecryptSecret(unittest.TestCase):
         result = client._decrypt_secret(resource_body)
 
         self.assertIsNone(result)
-        mock_decrypt.assert_not_called()
+        mock_decrypt_and_verify.assert_not_called()
 
 
 class TestLogin(unittest.TestCase):
