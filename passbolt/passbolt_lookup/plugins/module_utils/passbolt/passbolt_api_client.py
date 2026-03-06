@@ -226,7 +226,7 @@ class PassboltAPIClient:
         if resource_body.get("personal"):
             secret_signature_fingerprint = self.passbolt_account.key_id
         else:
-            modified_id = uuid.UUID(resource_body.get("modified_by", ""))
+            modified_id = uuid.UUID(user_secret.get("modified_by", ""))
             url = urljoin(
                 self.passbolt_account.fullbase_url,
                 f"users/{modified_id}.json"

@@ -282,11 +282,11 @@ class TestDecryptSecret(unittest.TestCase):
 
         client = _make_client()
         resource_body = {
-            "modified_by": OTHER_USER_ID,
             "personal": False,
             "secrets": [
                 {
                     "user_id": USER_ID,
+                    "modified_by": OTHER_USER_ID,
                     "data": "encrypted-secret-data",
                 }
             ]
