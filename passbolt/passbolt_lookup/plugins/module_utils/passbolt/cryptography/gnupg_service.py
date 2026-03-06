@@ -8,24 +8,49 @@ class GnuPGService:
     GPG = gnupg.GPG()
 
     @classmethod
-    def import_key(cls, armored_key: str, passphrase: str = None) -> str:
-        return cls.GPG.import_keys(armored_key, passphrase=passphrase).fingerprints
-
-    @classmethod
-    def decrypt(cls, data: str, passphrase: str) -> str:
+    def __decrypt(cls, data: str, passphrase: str, sign_key_fingerprint: str | None = None) -> str:
         decrypted = cls.GPG.decrypt(data, passphrase=passphrase)
         if not decrypted.ok:
             raise GnuPGException("Couldn't decrypt data: '%s'." % decrypted.status)
+        if sign_key_fingerprint is not None and decrypted.fingerprint != sign_key_fingerprint:
+            raise GnuPGException("Couldn't verify decrypted data.")
         return decrypted.data.decode('utf-8')
 
     @classmethod
-    def encrypt(cls, data: str, encrypt_key_id: str, sign_key_id: str | None = None,
+    def __encrypt(cls, data: str, encrypt_key_id: str, sign_key_id: str | None = None,
                 sign_passphrase: str | None = None) -> str:
         encrypted = cls.GPG.encrypt(data, encrypt_key_id, sign=sign_key_id, passphrase=sign_passphrase, armor=True,
                                     always_trust=True)
         if not encrypted.ok:
             raise GnuPGException("Couldn't encrypt data: '%s'." % encrypted.status)
         return encrypted.data.decode('ascii')
+
+    @classmethod
+    def import_key(cls, armored_key: str, passphrase: str = None) -> str:
+        imported_fingerprints = cls.GPG.import_keys(armored_key, passphrase=passphrase).fingerprints
+        if None in imported_fingerprints:
+            raise GnuPGException("One or more imported fingerprints were null.")
+        return imported_fingerprints
+
+    @classmethod
+    def decrypt(cls, data: str, passphrase: str) -> str:
+        return cls.__decrypt(data, passphrase)
+
+    @classmethod
+    def decrypt_and_verify(cls, data: str, passphrase: str, sign_key_fingerprint: str) -> str:
+        if sign_key_fingerprint is None:
+            raise GnuPGException("Signing key fingerprint is required for verification.")
+        return cls.__decrypt(data, passphrase, sign_key_fingerprint)
+
+    @classmethod
+    def encrypt(cls, data: str, encrypt_key_id: str) -> str:
+        return cls.__encrypt(data, encrypt_key_id)
+
+    @classmethod
+    def encrypt_and_sign(cls, data: str, encrypt_key_id: str, sign_key_id: str, sign_passphrase: str) -> str:
+        if sign_key_id is None:
+            raise GnuPGException("Signing key id is required.")
+        return cls.__encrypt(data, encrypt_key_id, sign_key_id, sign_passphrase)
 
     @classmethod
     def sign(cls, data: str, key_id: str, passphrase: str) -> str:
@@ -37,6 +62,6 @@ class GnuPGService:
     @classmethod
     def verify(cls, data: str, key_id: str) -> str:
         verified = cls.GPG.verify(data, extra_args=['-o', '-'])
-        if key_id is not None and verified.fingerprint != key_id:
+        if key_id is not None and (not verified or verified.fingerprint != key_id):
             raise GnuPGException("Couldn't verify data.")
         return verified.data

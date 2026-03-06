@@ -113,6 +113,18 @@ class PassboltAccountKitFactory(object):
         except jsonschema.ValidationError:
             raise PassboltAccountKitDeserializationException("Invalid account kit format.")
 
+        import_user_key_fingerprints = GnuPGService.import_key(account_kit["user_private_armored_key"], passphrase)
+        if len(import_user_key_fingerprints) != 2:
+            raise PassboltAccountKitDeserializationException("Expected 2 fingerprints to be imported when importing "
+                                                             "user key in keyring, got %s." %
+                                                             len(import_user_key_fingerprints))
+
+        if import_user_key_fingerprints[0] != import_user_key_fingerprints[1]:
+            raise PassboltAccountKitDeserializationException("Imported user key fingerprints don't match together.")
+        user_key_fingerprint = import_user_key_fingerprints[0]
+
+        GnuPGService.verify(decoded_account_kit_str, user_key_fingerprint)
+
         import_server_key_fingerprints = GnuPGService.import_key(account_kit["server_public_armored_key"], None)
         if len(import_server_key_fingerprints) > 1:
             raise PassboltAccountKitDeserializationException("Multiple keys have been imported when importing "
@@ -126,14 +138,5 @@ class PassboltAccountKitFactory(object):
             raise PassboltAccountKitDeserializationException("Server announced fingerprint doesn't match imported "
                                                              "fingerprint from account kit.")
 
-        # Server public key matches, continue
-        import_user_key_fingerprints = GnuPGService.import_key(account_kit["user_private_armored_key"], passphrase)
-        if len(import_user_key_fingerprints) != 2:
-            raise PassboltAccountKitDeserializationException("Expected 2 fingerprints to be imported when importing "
-                                                             "user key in keyring, got %s." % len(import_user_key_fingerprints))
-
-        if import_user_key_fingerprints[0] != import_user_key_fingerprints[1]:
-            raise PassboltAccountKitDeserializationException("Imported user key fingerprints don't match together.")
-
-        return PassboltAccount(account_kit["user_id"], import_user_key_fingerprints[0], account_kit["username"],
+        return PassboltAccount(account_kit["user_id"], user_key_fingerprint, account_kit["username"],
                                passphrase, account_kit["domain"], server_advertised_fingerprint)
