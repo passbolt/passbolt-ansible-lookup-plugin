@@ -48,6 +48,7 @@ _PATCH_HTTP = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils
 _PATCH_DECRYPT_AND_VERIFY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.decrypt_and_verify"
 _PATCH_IMPORT_KEY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.import_key"
 _PATCH_JWT_LOGIN = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.jwt_auth_strategy.JWTAuthStrategy.login"
+_PATCH_JWT_LOGOUT = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.jwt_auth_strategy.JWTAuthStrategy.logout"
 
 
 def _make_api_response(status_code, body, success=True):
@@ -346,6 +347,78 @@ class TestLogin(unittest.TestCase):
 
         with self.assertRaises(AuthenticationException):
             client.login()
+
+
+class TestLogout(unittest.TestCase):
+
+    def _make_logged_in_client(self):
+        client = _make_client()
+        client.auth_credentials = JWTCredentials("access-token", "refresh-token")
+        client._metadata_key_cache = {"mk-1": "FP1", "mk-2": "FP2"}
+        return client
+
+    @patch(_PATCH_JWT_LOGOUT)
+    def test_success_returns_true_and_clears_state(self, mock_jwt_logout):
+        mock_jwt_logout.return_value = True
+
+        client = self._make_logged_in_client()
+        result = client.logout()
+
+        self.assertTrue(result)
+        self.assertIsNone(client.auth_credentials)
+        self.assertEqual(client._metadata_key_cache, {})
+        mock_jwt_logout.assert_called_once()
+
+    @patch(_PATCH_JWT_LOGOUT)
+    def test_server_failure_still_clears_local_state(self, mock_jwt_logout):
+        mock_jwt_logout.return_value = False
+
+        client = self._make_logged_in_client()
+        result = client.logout()
+
+        self.assertFalse(result)
+        self.assertIsNone(client.auth_credentials)
+        self.assertEqual(client._metadata_key_cache, {})
+
+    @patch(_PATCH_JWT_LOGOUT)
+    def test_server_exception_still_clears_local_state(self, mock_jwt_logout):
+        mock_jwt_logout.side_effect = Exception("connection timeout")
+
+        client = self._make_logged_in_client()
+
+        with self.assertRaises(Exception) as ctx:
+            client.logout()
+
+        self.assertIn("connection timeout", str(ctx.exception))
+        self.assertIsNone(client.auth_credentials)
+        self.assertEqual(client._metadata_key_cache, {})
+
+    @patch(_PATCH_JWT_LOGOUT)
+    def test_original_credentials_passed_to_strategy(self, mock_jwt_logout):
+        mock_jwt_logout.return_value = True
+
+        client = self._make_logged_in_client()
+        original_creds = client.auth_credentials
+
+        client.logout()
+
+        passed_creds = mock_jwt_logout.call_args[0][1]
+        self.assertIs(passed_creds, original_creds)
+        self.assertIsNone(client.auth_credentials)
+
+    @patch(_PATCH_JWT_LOGOUT)
+    def test_verify_and_timeout_forwarded(self, mock_jwt_logout):
+        mock_jwt_logout.return_value = True
+
+        client = self._make_logged_in_client()
+        client.logout()
+
+        mock_jwt_logout.assert_called_once_with(
+            client.passbolt_account,
+            unittest.mock.ANY,
+            verify=False,
+            timeout=5,
+        )
 
 
 class TestGetResource(unittest.TestCase):

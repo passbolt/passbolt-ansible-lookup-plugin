@@ -62,6 +62,10 @@ def _make_login_response(servertime, success=True):
     return APIResponse(status_code, {"Content-Type": "application/json"}, content)
 
 
+def _make_jwt_credentials():
+    return JWTCredentials(ACCESS_TOKEN, REFRESH_TOKEN)
+
+
 def _valid_challenge_json():
     return json.dumps({
         "version": "1.0.0",
@@ -162,6 +166,44 @@ class TestJWTAuthStrategyLogin(unittest.TestCase):
             JWTAuthStrategy.login(_make_passbolt_account())
 
         self.assertIn("wrong", str(ctx.exception).lower())
+
+
+class TestJWTAuthStrategyLogout(unittest.TestCase):
+
+    @patch(_PATCH_HTTP)
+    def test_success_returns_true(self, mock_send):
+        content = {
+            "header": {"status": "success"},
+            "body": {},
+        }
+        mock_send.return_value = APIResponse(200, {"Content-Type": "application/json"}, content)
+
+        account = _make_passbolt_account()
+        credentials = _make_jwt_credentials()
+        result = JWTAuthStrategy.logout(account, credentials, verify=True, timeout=30)
+
+        self.assertTrue(result)
+        mock_send.assert_called_once()
+        api_request = mock_send.call_args[0][0]
+        self.assertEqual(api_request.uri, "https://passbolt.local/auth/jwt/logout.json")
+        self.assertEqual(api_request.body, {"refresh_token": REFRESH_TOKEN})
+        self.assertIs(api_request.auth_credentials, credentials)
+        self.assertEqual(api_request.auth_credentials.headers(), {"Authorization": f"Bearer {ACCESS_TOKEN}"})
+
+    @patch(_PATCH_HTTP)
+    def test_http_failure_returns_false(self, mock_send):
+        content = {
+            "header": {"status": "error"},
+            "body": None,
+        }
+        mock_send.return_value = APIResponse(401, {"Content-Type": "application/json"}, content)
+
+        account = _make_passbolt_account()
+        credentials = _make_jwt_credentials()
+        result = JWTAuthStrategy.logout(account, credentials)
+
+        self.assertFalse(result)
+        mock_send.assert_called_once()
 
 
 if __name__ == "__main__":
