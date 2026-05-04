@@ -1,17 +1,22 @@
 import json
 import jsonschema
 from http import HTTPMethod
-from typing import Optional
+from typing import Iterator, Optional
 from urllib.parse import urljoin
 import uuid
+
+from ansible.utils.display import Display
 
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.account.passbolt_account import PassboltAccount
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.api.api_request import APIRequest
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.jwt_auth_strategy import JWTAuthStrategy
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.auth_credentials import AuthCredentials
+from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.exceptions.gnupg_exception import GnuPGException
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service import GnuPGService
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.entities.passbolt_resource import PassboltResource
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.http.http_client_service import HTTPClientService
+
+display = Display()
 
 
 class PassboltAPIClient:
@@ -93,6 +98,65 @@ class PassboltAPIClient:
             decrypted_secret=secret,
         )
 
+    def list_resources(self, page_size: int = 50) -> Iterator[dict]:
+        if self.auth_credentials is None:
+            raise RuntimeError("Not logged in. Call login() first.")
+
+        page = 1
+        while True:
+            page_body = self._fetch_resources_page(page, page_size)
+            if not page_body:
+                return
+            for resource_body in page_body:
+                yield resource_body
+            if len(page_body) < page_size:
+                return
+            page += 1
+
+    def find_resource_uuid_by_filters(
+        self,
+        name: Optional[str] = None,
+        username: Optional[str] = None,
+        uri: Optional[str] = None,
+    ) -> uuid.UUID:
+        if self.auth_credentials is None:
+            raise RuntimeError("Not logged in. Call login() first.")
+        if name is None and username is None and uri is None:
+            raise ValueError("At least one of name, username, uri must be provided.")
+
+        for resource_body in self.list_resources():
+            resource_id = resource_body.get("id")
+            try:
+                metadata = self._decrypt_metadata(resource_body)
+            except GnuPGException as exc:
+                display.warning(
+                    f"Signature verification failed for resource '{resource_id}', skipping: {exc}"
+                )
+                continue
+            except Exception as exc:
+                display.vvvv(
+                    f"Metadata decryption failed for resource '{resource_id}', skipping: {exc}"
+                )
+                continue
+
+            if name is not None and metadata.get("name") != name:
+                continue
+            if username is not None and metadata.get("username") != username:
+                continue
+            if uri is not None:
+                uris = metadata.get("uris") or []
+                if not uris and metadata.get("uri"):
+                    uris = [metadata.get("uri")]
+                if uri not in uris:
+                    continue
+
+            return uuid.UUID(resource_id)
+
+        raise LookupError(
+            f"No resource found matching filters "
+            f"(name={name!r}, username={username!r}, uri={uri!r})."
+        )
+
     def _fetch_resource(self, id: uuid.UUID) -> dict:
         url = urljoin(
             self.passbolt_account.fullbase_url,
@@ -123,6 +187,29 @@ class PassboltAPIClient:
             raise LookupError(f"Resource '{id}' has been deleted.")
 
         return body
+
+    def _fetch_resources_page(self, page: int, limit: int) -> list:
+        url = urljoin(
+            self.passbolt_account.fullbase_url,
+            f"resources.json?page={page}&limit={limit}"
+        )
+
+        api_request = APIRequest(
+            HTTPMethod.GET,
+            url,
+            auth_credentials=self.auth_credentials,
+            verify=self.verify,
+            timeout=self.timeout
+        )
+
+        api_response = HTTPClientService.send(api_request)
+
+        if not api_response.is_success():
+            raise RuntimeError(
+                f"Failed to list resources page {page}. HTTP {api_response.http_status_code}"
+            )
+
+        return api_response.body or []
 
     def _decrypt_metadata(self, resource_body: dict) -> dict:
         encrypted_metadata = resource_body.get("metadata")
