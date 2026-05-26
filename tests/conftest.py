@@ -20,9 +20,11 @@ _NAMESPACE_CHAIN = [
     "ansible_collections.passbolt.passbolt_lookup",
     "ansible_collections.passbolt.passbolt_lookup.plugins",
     "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils",
+    "ansible_collections.passbolt.passbolt_lookup.plugins.lookup",
 ]
 
-_SOURCE_ROOT = REPO_ROOT / "passbolt" / "passbolt_lookup" / "plugins" / "module_utils"
+_MODULE_UTILS_ROOT = REPO_ROOT / "passbolt" / "passbolt_lookup" / "plugins" / "module_utils"
+_LOOKUP_ROOT = REPO_ROOT / "passbolt" / "passbolt_lookup" / "plugins" / "lookup"
 
 for ns in _NAMESPACE_CHAIN:
     if ns not in sys.modules:
@@ -31,4 +33,5 @@ for ns in _NAMESPACE_CHAIN:
         mod.__package__ = ns
         sys.modules[ns] = mod
 
-sys.modules[_NAMESPACE_CHAIN[-1]].__path__ = [str(_SOURCE_ROOT)]
+sys.modules["ansible_collections.passbolt.passbolt_lookup.plugins.module_utils"].__path__ = [str(_MODULE_UTILS_ROOT)]
+sys.modules["ansible_collections.passbolt.passbolt_lookup.plugins.lookup"].__path__ = [str(_LOOKUP_ROOT)]

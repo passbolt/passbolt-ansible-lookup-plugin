@@ -38,6 +38,12 @@ from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.
 
 display = Display()
 
+_OMIT_PLACEHOLDER_PREFIX = '__omit_place_holder__'
+
+
+def _is_omit_placeholder(value):
+    return isinstance(value, str) and value.startswith(_OMIT_PLACEHOLDER_PREFIX)
+
 
 class LookupModule(LookupBase):
     ACCOUNT_KIT_OPTION_KEY = 'account_kit'
@@ -46,11 +52,13 @@ class LookupModule(LookupBase):
     def run(self, terms, variables=None, **kwargs):
         self.set_options(var_options=variables, direct=kwargs)
 
-        if not 'passbolt' in variables or not self.ACCOUNT_KIT_OPTION_KEY in variables['passbolt']:
-            raise AnsibleError("Variable 'passbolt.%s' is required but not provided." % self.ACCOUNT_KIT_OPTION_KEY)
+        passbolt_vars = self._templar.template(variables.get('passbolt', {}))
 
-        if not self.ACCOUNT_PASSPHRASE_OPTION_KEY in variables['passbolt']:
-            raise AnsibleError("Variable 'passbolt.%s' is required but not provided." % self.ACCOUNT_PASSPHRASE_OPTION_KEY)
+        for required_key in (self.ACCOUNT_KIT_OPTION_KEY, self.ACCOUNT_PASSPHRASE_OPTION_KEY):
+            if required_key not in passbolt_vars or _is_omit_placeholder(passbolt_vars[required_key]):
+                raise AnsibleError(
+                    "Variable 'passbolt.%s' is required but not provided." % required_key
+                )
 
         if len(terms) != 1:
             raise AnsibleError("expected 1 argument, got %d" % len(terms))
@@ -61,8 +69,8 @@ class LookupModule(LookupBase):
         display.vvvv(u"Skipping SSL validation is set to '%s'." % self.get_option('skip_ssl_verification'))
         try:
             passbolt_account = PassboltAccountKitFactory.from_string(
-                variables['passbolt'][self.ACCOUNT_KIT_OPTION_KEY],
-                variables['passbolt'][self.ACCOUNT_PASSPHRASE_OPTION_KEY],
+                passbolt_vars[self.ACCOUNT_KIT_OPTION_KEY],
+                passbolt_vars[self.ACCOUNT_PASSPHRASE_OPTION_KEY],
                 verify=not self.get_option('skip_ssl_verification'),
                 timeout=self.get_option('timeout')
             )
