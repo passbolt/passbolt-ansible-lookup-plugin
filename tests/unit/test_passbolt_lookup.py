@@ -211,7 +211,7 @@ class TestRunDispatchFilters(unittest.TestCase):
         plugin.run([], variables=VARIABLES)
 
         api.find_resource_uuid_by_filters.assert_called_once_with(
-            name="acme-db", username=None, uri=None
+            expected_name="acme-db", expected_username=None, expected_uri=None
         )
         api.get_resource.assert_called_once_with(uuid.UUID(RESOLVED_UUID))
 
@@ -228,7 +228,7 @@ class TestRunDispatchFilters(unittest.TestCase):
         plugin.run([], variables=VARIABLES)
 
         api.find_resource_uuid_by_filters.assert_called_once_with(
-            name="db-prod", username="app", uri="https://db.acme.internal"
+            expected_name="db-prod", expected_username="app", expected_uri="https://db.acme.internal"
         )
 
     @patch(_PATCH_FACTORY)
@@ -241,7 +241,7 @@ class TestRunDispatchFilters(unittest.TestCase):
         plugin.run([], variables=VARIABLES)
 
         api.find_resource_uuid_by_filters.assert_called_once_with(
-            name=None, username="root", uri=None
+            expected_name=None, expected_username="root", expected_uri=None
         )
 
     @patch(_PATCH_FACTORY)
@@ -254,7 +254,7 @@ class TestRunDispatchFilters(unittest.TestCase):
         plugin.run([], variables=VARIABLES)
 
         api.find_resource_uuid_by_filters.assert_called_once_with(
-            name=None, username=None, uri="https://x"
+            expected_name=None, expected_username=None, expected_uri="https://x"
         )
 
 

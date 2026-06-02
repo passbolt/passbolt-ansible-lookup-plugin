@@ -598,7 +598,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
         client = PassboltAPIClient(account, verify=False, timeout=5)
 
         with self.assertRaises(RuntimeError) as ctx:
-            client.find_resource_uuid_by_filters(name="anything")
+            client.find_resource_uuid_by_filters(expected_name="anything")
 
         self.assertIn("Not logged in", str(ctx.exception))
 
@@ -619,7 +619,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
         ]
 
         client = _make_client()
-        result = client.find_resource_uuid_by_filters(name="acme-db")
+        result = client.find_resource_uuid_by_filters(expected_name="acme-db")
 
         self.assertEqual(result, uuid.UUID(match_id))
 
@@ -641,7 +641,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
 
         client = _make_client()
         result = client.find_resource_uuid_by_filters(
-            name="db-prod", username="app", uri="https://db.acme.internal"
+            expected_name="db-prod", expected_username="app", expected_uri="https://db.acme.internal"
         )
 
         self.assertEqual(result, uuid.UUID(match_id))
@@ -655,7 +655,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
         mock_decrypt.return_value = _make_decrypted_metadata(uris=["https://x", "https://y", "https://z"])
 
         client = _make_client()
-        result = client.find_resource_uuid_by_filters(uri="https://y")
+        result = client.find_resource_uuid_by_filters(expected_uri="https://y")
 
         self.assertEqual(result, uuid.UUID(match_id))
 
@@ -668,7 +668,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
         mock_decrypt.return_value = _make_decrypted_metadata(uri="https://legacy")
 
         client = _make_client()
-        result = client.find_resource_uuid_by_filters(uri="https://legacy")
+        result = client.find_resource_uuid_by_filters(expected_uri="https://legacy")
 
         self.assertEqual(result, uuid.UUID(match_id))
 
@@ -686,7 +686,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
 
         client = _make_client()
         with self.assertRaises(LookupError) as ctx:
-            client.find_resource_uuid_by_filters(name="not-there")
+            client.find_resource_uuid_by_filters(expected_name="not-there")
 
         msg = str(ctx.exception)
         self.assertIn("not-there", msg)
@@ -708,7 +708,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
         ]
 
         client = _make_client()
-        result = client.find_resource_uuid_by_filters(name="db")
+        result = client.find_resource_uuid_by_filters(expected_name="db")
 
         self.assertEqual(result, uuid.UUID(first_id))
         # The second resource must never be decrypted.
@@ -731,7 +731,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
         ]
 
         client = _make_client()
-        result = client.find_resource_uuid_by_filters(name="db")
+        result = client.find_resource_uuid_by_filters(expected_name="db")
 
         self.assertEqual(result, uuid.UUID(good_id))
         mock_display.vvvv.assert_called_once()
@@ -754,7 +754,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
         ]
 
         client = _make_client()
-        result = client.find_resource_uuid_by_filters(name="db")
+        result = client.find_resource_uuid_by_filters(expected_name="db")
 
         self.assertEqual(result, uuid.UUID(good_id))
         mock_display.warning.assert_called_once()
@@ -780,7 +780,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
         ]
 
         client = _make_client()
-        result = client.find_resource_uuid_by_filters(name="db")
+        result = client.find_resource_uuid_by_filters(expected_name="db")
 
         self.assertEqual(result, uuid.UUID(match_id))
         self.assertEqual(mock_send.call_count, 1)
@@ -794,7 +794,7 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
         mock_decrypt.return_value = _make_decrypted_metadata(name="db")
 
         client = _make_client()
-        client.find_resource_uuid_by_filters(name="db")
+        client.find_resource_uuid_by_filters(expected_name="db")
 
         for url in _called_urls(mock_send):
             self.assertNotIn("contain[secret]", url)

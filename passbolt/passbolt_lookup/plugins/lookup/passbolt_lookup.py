@@ -146,9 +146,9 @@ class LookupModule(LookupBase):
                     % (name_filter, username_filter, uri_filter)
                 )
                 resource_uuid = passbolt_api_client.find_resource_uuid_by_filters(
-                    name=name_filter,
-                    username=username_filter,
-                    uri=uri_filter,
+                    expected_name=name_filter,
+                    expected_username=username_filter,
+                    expected_uri=uri_filter,
                 )
                 display.vvvv(u"Resolved to UUID '%s'." % resource_uuid)
 

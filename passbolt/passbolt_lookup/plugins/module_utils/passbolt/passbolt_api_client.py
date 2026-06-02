@@ -115,13 +115,13 @@ class PassboltAPIClient:
 
     def find_resource_uuid_by_filters(
         self,
-        name: Optional[str] = None,
-        username: Optional[str] = None,
-        uri: Optional[str] = None,
+        expected_name: Optional[str] = None,
+        expected_username: Optional[str] = None,
+        expected_uri: Optional[str] = None,
     ) -> uuid.UUID:
         if self.auth_credentials is None:
             raise RuntimeError("Not logged in. Call login() first.")
-        if name is None and username is None and uri is None:
+        if all(f is None for f in [expected_name, expected_username, expected_uri]):
             raise ValueError("At least one of name, username, uri must be provided.")
 
         for resource_body in self.list_resources():
@@ -139,22 +139,22 @@ class PassboltAPIClient:
                 )
                 continue
 
-            if name is not None and metadata.get("name") != name:
+            if expected_name is not None and metadata.get("name") != expected_name:
                 continue
-            if username is not None and metadata.get("username") != username:
+            if expected_username is not None and metadata.get("username") != expected_username:
                 continue
-            if uri is not None:
+            if expected_uri is not None:
                 uris = metadata.get("uris") or []
                 if not uris and metadata.get("uri"):
                     uris = [metadata.get("uri")]
-                if uri not in uris:
+                if expected_uri not in uris:
                     continue
 
             return uuid.UUID(resource_id)
 
         raise LookupError(
             f"No resource found matching filters "
-            f"(name={name!r}, username={username!r}, uri={uri!r})."
+            f"(name={expected_name!r}, username={expected_username!r}, uri={expected_uri!r})."
         )
 
     def _fetch_resource(self, id: uuid.UUID) -> dict:
