@@ -9,6 +9,7 @@ from ansible.utils.display import Display
 
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.account.passbolt_account import PassboltAccount
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.api.api_request import APIRequest
+from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.api.api_response import APIResponse
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.jwt_auth_strategy import JWTAuthStrategy
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.auth_credentials import AuthCredentials
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.exceptions.gnupg_exception import GnuPGException
@@ -17,6 +18,10 @@ from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.http.http_client_service import HTTPClientService
 
 display = Display()
+
+
+SCAN_PAGE_SIZE = 500
+SCAN_MAX_PAGES = 10000
 
 
 class PassboltAPIClient:
@@ -61,6 +66,8 @@ class PassboltAPIClient:
         self.timeout = timeout
         self.auth_credentials: Optional[AuthCredentials] = None
         self._metadata_key_cache: dict[str, str] = {}
+        self._session_key_cache: dict[str, str] = {}
+        self._session_keys_loaded: bool = False
 
     def login(self) -> bool:
         auth_credentials = JWTAuthStrategy.login(
@@ -75,6 +82,8 @@ class PassboltAPIClient:
 
     def logout(self) -> bool:
         self._metadata_key_cache.clear()
+        self._session_key_cache.clear()
+        self._session_keys_loaded = False
         auth_credentials = self.auth_credentials
         self.auth_credentials = None
         return JWTAuthStrategy.logout(
@@ -104,7 +113,7 @@ class PassboltAPIClient:
 
         page = 1
         while True:
-            page_body = self._fetch_resources_page(page, page_size)
+            page_body = self._fetch_resources_page(page, page_size).body or []
             if not page_body:
                 return
             for resource_body in page_body:
@@ -124,13 +133,54 @@ class PassboltAPIClient:
         if all(f is None for f in [expected_name, expected_username, expected_uri]):
             raise ValueError("At least one of name, username, uri must be provided.")
 
-        for resource_body in self.list_resources():
+        if not self._session_keys_loaded:
+            self._load_session_keys()
+            self._session_keys_loaded = True
+
+        page = 1
+        fetched = 0
+        while True:
+            if page > SCAN_MAX_PAGES:
+                display.warning(
+                    "Passbolt filter scan reached the %d-page safety limit; stopping. "
+                    "Refine filters or pin by UUID." % SCAN_MAX_PAGES
+                )
+                break
+            api_response = self._fetch_resources_page(page, SCAN_PAGE_SIZE)
+            page_body = api_response.body or []
+            if not page_body:
+                break
+            match = self._scan_page_for_match(page_body, expected_name, expected_username, expected_uri)
+            if match is not None:
+                return match
+            fetched += len(page_body)
+            pagination = (api_response.header or {}).get("pagination") or {}
+            total = pagination.get("count")
+            if total is not None and fetched >= total:
+                break
+            if len(page_body) < (pagination.get("limit") or SCAN_PAGE_SIZE):
+                break
+            page += 1
+
+        raise LookupError(
+            f"No resource found matching filters "
+            f"(name={expected_name!r}, username={expected_username!r}, uri={expected_uri!r})."
+        )
+
+    def _scan_page_for_match(
+        self,
+        page_body: list,
+        name: Optional[str],
+        username: Optional[str],
+        uri: Optional[str],
+    ) -> Optional[uuid.UUID]:
+        for resource_body in page_body:
             resource_id = resource_body.get("id")
             try:
-                metadata = self._decrypt_metadata(resource_body)
+                metadata = self._decrypt_metadata(resource_body, verify=True)
             except GnuPGException as exc:
                 display.warning(
-                    f"Signature verification failed for resource '{resource_id}', skipping: {exc}"
+                    f"Could not decrypt or verify metadata for resource '{resource_id}', skipping: {exc}"
                 )
                 continue
             except Exception as exc:
@@ -138,24 +188,28 @@ class PassboltAPIClient:
                     f"Metadata decryption failed for resource '{resource_id}', skipping: {exc}"
                 )
                 continue
+            if self._metadata_matches_filters(metadata, name, username, uri):
+                return uuid.UUID(resource_id)
+        return None
 
-            if expected_name is not None and metadata.get("name") != expected_name:
-                continue
-            if expected_username is not None and metadata.get("username") != expected_username:
-                continue
-            if expected_uri is not None:
-                uris = metadata.get("uris") or []
-                if not uris and metadata.get("uri"):
-                    uris = [metadata.get("uri")]
-                if expected_uri not in uris:
-                    continue
-
-            return uuid.UUID(resource_id)
-
-        raise LookupError(
-            f"No resource found matching filters "
-            f"(name={expected_name!r}, username={expected_username!r}, uri={expected_uri!r})."
-        )
+    @staticmethod
+    def _metadata_matches_filters(
+        metadata: dict,
+        name: Optional[str],
+        username: Optional[str],
+        uri: Optional[str],
+    ) -> bool:
+        if name is not None and metadata.get("name") != name:
+            return False
+        if username is not None and metadata.get("username") != username:
+            return False
+        if uri is not None:
+            uris = metadata.get("uris") or []
+            if not uris and metadata.get("uri"):
+                uris = [metadata.get("uri")]
+            if uri not in uris:
+                return False
+        return True
 
     def _fetch_resource(self, id: uuid.UUID) -> dict:
         url = urljoin(
@@ -188,7 +242,7 @@ class PassboltAPIClient:
 
         return body
 
-    def _fetch_resources_page(self, page: int, limit: int) -> list:
+    def _fetch_resources_page(self, page: int, limit: int) -> APIResponse:
         url = urljoin(
             self.passbolt_account.fullbase_url,
             f"resources.json?page={page}&limit={limit}"
@@ -209,30 +263,73 @@ class PassboltAPIClient:
                 f"Failed to list resources page {page}. HTTP {api_response.http_status_code}"
             )
 
-        return api_response.body or []
+        return api_response
 
-    def _decrypt_metadata(self, resource_body: dict) -> dict:
+    def _decrypt_metadata(self, resource_body: dict, verify: bool = True) -> dict:
         encrypted_metadata = resource_body.get("metadata")
         if not encrypted_metadata:
             raise ValueError("Resource has no encrypted metadata.")
 
+        resource_id = resource_body.get("id")
+        session_key = self._session_key_cache.get(resource_id) if resource_id else None
+        if session_key is not None:
+            try:
+                sign_fingerprint = self._resolve_metadata_key(resource_body)[1] if verify else None
+                decrypted_json = GnuPGService.decrypt_with_session_key(
+                    encrypted_metadata, session_key, sign_fingerprint)
+                return json.loads(decrypted_json)
+            except (GnuPGException, json.JSONDecodeError) as exc:
+                display.vvvv(
+                    f"Session-key decryption failed for resource '{resource_id}', "
+                    f"falling back to asymmetric decryption: {exc}"
+                )
+
+        decryption_passphrase, metadata_key_fingerprint = self._resolve_metadata_key(resource_body)
+        if verify:
+            decrypted_json = GnuPGService.decrypt_and_verify(encrypted_metadata, decryption_passphrase,
+                                                             metadata_key_fingerprint)
+        else:
+            decrypted_json = GnuPGService.decrypt(encrypted_metadata, decryption_passphrase)
+        return json.loads(decrypted_json)
+
+    def _resolve_metadata_key(self, resource_body: dict) -> tuple[Optional[str], str]:
         metadata_key_type = resource_body.get("metadata_key_type")
 
         if metadata_key_type == self.METADATA_KEY_TYPE_USER:
-            decryption_passphrase = self.passbolt_account.passphrase
-            metadata_key_fingerprint = self.passbolt_account.key_id
+            return self.passbolt_account.passphrase, self.passbolt_account.key_id
         elif metadata_key_type == self.METADATA_KEY_TYPE_SHARED:
             metadata_key_id = resource_body.get("metadata_key_id")
             if not metadata_key_id:
                 raise ValueError("Resource uses shared_key but metadata_key_id is missing.")
-            metadata_key_fingerprint = self._import_metadata_private_key(metadata_key_id)
-            decryption_passphrase = None
+            return None, self._import_metadata_private_key(metadata_key_id)
         else:
             raise ValueError(f"Invalid metadata_key_type: '{metadata_key_type}'")
 
-        decrypted_json = GnuPGService.decrypt_and_verify(encrypted_metadata, decryption_passphrase,
-                                                         metadata_key_fingerprint)
-        return json.loads(decrypted_json)
+    def _load_session_keys(self) -> None:
+        try:
+            url = urljoin(self.passbolt_account.fullbase_url, "metadata/session-keys.json")
+            api_response = HTTPClientService.send(APIRequest(
+                HTTPMethod.GET, url, auth_credentials=self.auth_credentials,
+                verify=self.verify, timeout=self.timeout))
+            if not api_response.is_success():
+                display.vvvv("Metadata session keys unavailable (HTTP %s); proceeding without cache."
+                             % api_response.http_status_code)
+                return
+            for entry in api_response.body or []:
+                data = entry.get("data")
+                if not data:
+                    continue
+                bundle = json.loads(GnuPGService.decrypt(data, self.passbolt_account.passphrase))
+                if bundle.get("object_type") != "PASSBOLT_SESSION_KEYS":
+                    continue
+                for sk in bundle.get("session_keys", []):
+                    if (sk.get("foreign_model") == "Resource"
+                            and sk.get("foreign_id") and sk.get("session_key")):
+                        self._session_key_cache[sk["foreign_id"]] = sk["session_key"]
+            display.vvvv("Loaded %d metadata session key(s) from cache."
+                         % len(self._session_key_cache))
+        except Exception as exc:
+            display.vvvv("Failed to load metadata session keys; proceeding without cache: %s" % exc)
 
     def _import_metadata_private_key(self, metadata_key_id: str) -> str:
         if metadata_key_id not in self._metadata_key_cache:

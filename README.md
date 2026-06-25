@@ -49,6 +49,13 @@ Recommendations:
 - If you need filter-based lookup inside a loop, resolve once at the top of the play and reuse the value with `set_fact`.
 - Each filter lookup decrypts metadata for the scanned resources. The Ansible controller host should therefore be considered a trust-sensitive environment even when only metadata is exposed (names, usernames and URIs disclose organisational topology)
 
+#### Metadata session keys (filter lookups only)
+
+Filter lookups (`name`/`username`/`uri`) reuse the session keys passbolt caches server-side, so metadata decrypts fast instead of running a slow private-key operation on every scanned resource. Missing or stale keys fall back automatically, with identical results.
+
+> [IMPORTANT]
+> This cache is filled by clients that have already opened your resources, the plugin only reads it. On large vaults e.g., 7K+, a filter lookup on resources that no client has ever loaded is slow. The easiest fix is to log in to your passbolt account once (web, mobile or desktop) and the cache builds itself. Pinning by UUID skips the scan entirely and is recommended for better performances overall.
+
 ### Return format
 The lookup returns a dictionary with two sections:
 - metadata (decrypted public information)

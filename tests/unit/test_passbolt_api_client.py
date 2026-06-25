@@ -49,18 +49,21 @@ DECRYPTED_SECRET = {
 
 _PATCH_HTTP = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.http.http_client_service.HTTPClientService.send"
 _PATCH_DECRYPT_AND_VERIFY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.decrypt_and_verify"
+_PATCH_DECRYPT = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.decrypt"
 _PATCH_IMPORT_KEY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.import_key"
 _PATCH_JWT_LOGIN = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.jwt_auth_strategy.JWTAuthStrategy.login"
 _PATCH_JWT_LOGOUT = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.jwt_auth_strategy.JWTAuthStrategy.logout"
 _PATCH_DISPLAY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.passbolt_api_client.display"
 _PATCH_DECRYPT_METADATA = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.passbolt_api_client.PassboltAPIClient._decrypt_metadata"
+_PATCH_DECRYPT_WITH_SESSION_KEY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.decrypt_with_session_key"
+_PATCH_LOAD_SESSION_KEYS = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.passbolt_api_client.PassboltAPIClient._load_session_keys"
 
 
-def _make_api_response(status_code, body, success=True):
-    content = {
-        "header": {"status": "success" if success else "error"},
-        "body": body,
-    }
+def _make_api_response(status_code, body, success=True, pagination=None):
+    header = {"status": "success" if success else "error"}
+    if pagination is not None:
+        header["pagination"] = pagination
+    content = {"header": header, "body": body}
     return APIResponse(status_code, {"Content-Type": "application/json"}, content)
 
 
@@ -75,6 +78,10 @@ def _make_client():
     )
     client = PassboltAPIClient(account, verify=False, timeout=5)
     client.auth_credentials = MagicMock(spec=AuthCredentials)
+    # Pretend the session-key bundle was already loaded (empty cache) so scan tests do not
+    # trigger the lazy GET /metadata/session-keys.json. Session-key behaviour is covered
+    # explicitly in TestSessionKeys.
+    client._session_keys_loaded = True
     return client
 
 
@@ -246,6 +253,65 @@ class TestDecryptMetadata(unittest.TestCase):
         self.assertIn("bogus", str(ctx.exception))
         mock_decrypt_and_verify.assert_not_called()
 
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    @patch(_PATCH_DECRYPT)
+    def test_user_key_verify_false_skips_verification(self, mock_decrypt, mock_decrypt_and_verify):
+        mock_decrypt.return_value = json.dumps(DECRYPTED_METADATA)
+
+        client = _make_client()
+        resource_body = {
+            "metadata": "-----BEGIN PGP MESSAGE-----\nfake\n-----END PGP MESSAGE-----",
+            "metadata_key_type": "user_key",
+        }
+
+        result = client._decrypt_metadata(resource_body, verify=False)
+
+        mock_decrypt.assert_called_once_with(resource_body["metadata"], PASSPHRASE)
+        mock_decrypt_and_verify.assert_not_called()
+        self.assertEqual(result, DECRYPTED_METADATA)
+
+    @patch(_PATCH_IMPORT_KEY)
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    @patch(_PATCH_DECRYPT)
+    @patch(_PATCH_HTTP)
+    def test_shared_key_verify_false_still_imports_key(self, mock_send, mock_decrypt, mock_decrypt_and_verify, mock_import_key):
+        metadata_key_id = "mk-1111-2222-3333-444444444444"
+
+        # decrypt_and_verify is still used to unwrap the metadata private key
+        # (that path is unchanged); decrypt (no verify) is used for the metadata blob.
+        mock_decrypt_and_verify.return_value = json.dumps(
+            {"armored_key": "-----BEGIN PGP PRIVATE KEY-----\nfake\n-----END PGP PRIVATE KEY-----"}
+        )
+        mock_decrypt.return_value = json.dumps(DECRYPTED_METADATA)
+        mock_import_key.return_value = ["AAAAAAAA", "AAAAAAAA"]
+
+        metadata_keys_body = [
+            {
+                "id": metadata_key_id,
+                "metadata_private_keys": [
+                    {
+                        "user_id": USER_ID,
+                        "metadata_key_id": metadata_key_id,
+                        "data": "encrypted-private-key-data",
+                    }
+                ],
+            }
+        ]
+        mock_send.return_value = _make_api_response(200, metadata_keys_body)
+
+        client = _make_client()
+        resource_body = {
+            "metadata": "encrypted-metadata",
+            "metadata_key_type": "shared_key",
+            "metadata_key_id": metadata_key_id,
+        }
+
+        result = client._decrypt_metadata(resource_body, verify=False)
+
+        self.assertEqual(result, DECRYPTED_METADATA)
+        mock_import_key.assert_called_once()
+        mock_decrypt.assert_called_once_with("encrypted-metadata", None)
+
 
 class TestDecryptSecret(unittest.TestCase):
 
@@ -360,6 +426,7 @@ class TestLogout(unittest.TestCase):
         client = _make_client()
         client.auth_credentials = JWTCredentials("access-token", "refresh-token")
         client._metadata_key_cache = {"mk-1": "FP1", "mk-2": "FP2"}
+        client._session_key_cache = {"res-1": "9:AAAA", "res-2": "9:BBBB"}
         return client
 
     @patch(_PATCH_JWT_LOGOUT)
@@ -372,6 +439,8 @@ class TestLogout(unittest.TestCase):
         self.assertTrue(result)
         self.assertIsNone(client.auth_credentials)
         self.assertEqual(client._metadata_key_cache, {})
+        self.assertEqual(client._session_key_cache, {})
+        self.assertFalse(client._session_keys_loaded)
         mock_jwt_logout.assert_called_once()
 
     @patch(_PATCH_JWT_LOGOUT)
@@ -740,16 +809,16 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
     @patch(_PATCH_DISPLAY)
     @patch(_PATCH_DECRYPT_METADATA)
     @patch(_PATCH_HTTP)
-    def test_signature_verification_failure_warns_and_continues(self, mock_send, mock_decrypt, mock_display):
-        tampered_id = "99999999-9999-9999-9999-999999999999"
-        good_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    def test_metadata_crypto_failure_warns_and_continues(self, mock_send, mock_decrypt, mock_display):
+        bad_id = "99999999-9999-9999-9999-999999999999"
+        good_id = "88888888-8888-8888-8888-888888888888"
         bodies = [
-            _make_resource_body(tampered_id),
+            _make_resource_body(bad_id),
             _make_resource_body(good_id),
         ]
         mock_send.return_value = _make_api_response(200, bodies)
         mock_decrypt.side_effect = [
-            GnuPGException("Couldn't verify decrypted data."),
+            GnuPGException("Couldn't decrypt data"),
             _make_decrypted_metadata(name="db"),
         ]
 
@@ -758,8 +827,23 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
 
         self.assertEqual(result, uuid.UUID(good_id))
         mock_display.warning.assert_called_once()
-        self.assertIn(tampered_id, mock_display.warning.call_args[0][0])
-        mock_display.vvvv.assert_not_called()
+        self.assertIn(bad_id, mock_display.warning.call_args[0][0])
+
+    @patch(_PATCH_DECRYPT_METADATA)
+    @patch(_PATCH_HTTP)
+    def test_scan_calls_decrypt_metadata_with_verification(self, mock_send, mock_decrypt):
+        match_id = "99999999-9999-9999-9999-999999999999"
+        bodies = [_make_resource_body(match_id)]
+        mock_send.return_value = _make_api_response(200, bodies)
+        mock_decrypt.return_value = _make_decrypted_metadata(name="db")
+
+        client = _make_client()
+        client.find_resource_uuid_by_filters(expected_name="db")
+
+        mock_decrypt.assert_called_once()
+        # The scan verifies signatures, so a tampered or unverifiable resource is skipped
+        # rather than matched on forged metadata.
+        self.assertEqual(mock_decrypt.call_args.kwargs.get("verify"), True)
 
     @patch(_PATCH_DECRYPT_METADATA)
     @patch(_PATCH_HTTP)
@@ -798,6 +882,239 @@ class TestFindResourceUuidByFilters(unittest.TestCase):
 
         for url in _called_urls(mock_send):
             self.assertNotIn("contain[secret]", url)
+
+    @patch(_PATCH_DECRYPT_METADATA)
+    @patch(_PATCH_HTTP)
+    def test_pagination_stops_once_count_reached(self, mock_send, mock_decrypt):
+        page1 = [_make_resource_body(f"aaaaaaaa-aaaa-aaaa-aaaa-{i:012d}") for i in range(2)]
+        page2 = [_make_resource_body(f"bbbbbbbb-bbbb-bbbb-bbbb-{i:012d}") for i in range(2)]
+        # count=4 across two pages of 2; no match anywhere. A third fetch would StopIteration.
+        mock_send.side_effect = [
+            _make_api_response(200, page1, pagination={"limit": 2, "page": 1, "count": 4}),
+            _make_api_response(200, page2, pagination={"limit": 2, "page": 2, "count": 4}),
+        ]
+        mock_decrypt.return_value = _make_decrypted_metadata(name="nope")
+
+        client = _make_client()
+        with self.assertRaises(LookupError):
+            client.find_resource_uuid_by_filters(expected_name="absent")
+
+        self.assertEqual(mock_send.call_count, 2)
+
+    @patch(_PATCH_DECRYPT_METADATA)
+    @patch(_PATCH_HTTP)
+    def test_server_capped_limit_keeps_paginating(self, mock_send, mock_decrypt):
+        # Server caps the page at 2 even though SCAN_PAGE_SIZE requests more: a full page must
+        # not be mistaken for the last one. Match lives on the second page.
+        match_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        page1 = [_make_resource_body(f"dddddddd-dddd-dddd-dddd-{i:012d}") for i in range(2)]
+        page2 = [_make_resource_body(match_id)]
+        mock_send.side_effect = [
+            _make_api_response(200, page1, pagination={"limit": 2, "page": 1}),
+            _make_api_response(200, page2, pagination={"limit": 2, "page": 2}),
+        ]
+
+        def fake_decrypt(resource_body, verify=True):
+            if resource_body["id"] == match_id:
+                return _make_decrypted_metadata(name="db")
+            return _make_decrypted_metadata(name="other")
+
+        mock_decrypt.side_effect = fake_decrypt
+
+        client = _make_client()
+        result = client.find_resource_uuid_by_filters(expected_name="db")
+
+        self.assertEqual(result, uuid.UUID(match_id))
+        self.assertEqual(mock_send.call_count, 2)
+
+    @patch("ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.passbolt_api_client.SCAN_MAX_PAGES", 3)
+    @patch(_PATCH_DISPLAY)
+    @patch(_PATCH_DECRYPT_METADATA)
+    @patch(_PATCH_HTTP)
+    def test_pagination_safety_limit_stops_runaway_scan(self, mock_send, mock_decrypt, mock_display):
+        # Server ignores pagination: every page is full, no count, no match. The scan must be
+        # bounded by SCAN_MAX_PAGES instead of looping forever.
+        full_page = [_make_resource_body("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")]
+        mock_send.return_value = _make_api_response(200, full_page, pagination={"limit": 1})
+        mock_decrypt.return_value = _make_decrypted_metadata(name="nope")
+
+        client = _make_client()
+        with self.assertRaises(LookupError):
+            client.find_resource_uuid_by_filters(expected_name="absent")
+
+        self.assertEqual(mock_send.call_count, 3)
+        mock_display.warning.assert_called_once()
+
+
+class TestSessionKeys(unittest.TestCase):
+
+    SESSION_KEY = "9:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
+
+    @patch(_PATCH_DECRYPT)
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    @patch(_PATCH_DECRYPT_WITH_SESSION_KEY)
+    def test_hit_uses_session_key_and_skips_asymmetric(self, mock_sk, mock_dav, mock_d):
+        mock_sk.return_value = json.dumps(DECRYPTED_METADATA)
+
+        client = _make_client()
+        client._session_key_cache = {RESOURCE_ID: self.SESSION_KEY}
+        resource_body = {
+            "id": RESOURCE_ID,
+            "metadata": "encrypted",
+            "metadata_key_type": "user_key",
+        }
+
+        result = client._decrypt_metadata(resource_body)
+
+        self.assertEqual(result, DECRYPTED_METADATA)
+        mock_sk.assert_called_once()
+        mock_dav.assert_not_called()
+        mock_d.assert_not_called()
+
+    @patch(_PATCH_DECRYPT_WITH_SESSION_KEY)
+    def test_hit_verify_false_passes_no_fingerprint(self, mock_sk):
+        mock_sk.return_value = json.dumps(DECRYPTED_METADATA)
+
+        client = _make_client()
+        client._session_key_cache = {RESOURCE_ID: self.SESSION_KEY}
+        resource_body = {"id": RESOURCE_ID, "metadata": "enc", "metadata_key_type": "user_key"}
+
+        client._decrypt_metadata(resource_body, verify=False)
+
+        mock_sk.assert_called_once_with("enc", self.SESSION_KEY, None)
+
+    @patch(_PATCH_DECRYPT_WITH_SESSION_KEY)
+    def test_hit_verify_true_passes_signer_fingerprint(self, mock_sk):
+        mock_sk.return_value = json.dumps(DECRYPTED_METADATA)
+
+        client = _make_client()
+        client._session_key_cache = {RESOURCE_ID: self.SESSION_KEY}
+        resource_body = {"id": RESOURCE_ID, "metadata": "enc", "metadata_key_type": "user_key"}
+
+        client._decrypt_metadata(resource_body, verify=True)
+
+        mock_sk.assert_called_once_with("enc", self.SESSION_KEY, USER_KEY_FINGERPRINT)
+
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    @patch(_PATCH_DECRYPT_WITH_SESSION_KEY)
+    def test_miss_falls_back_to_asymmetric(self, mock_sk, mock_dav):
+        mock_dav.return_value = json.dumps(DECRYPTED_METADATA)
+
+        client = _make_client()
+        client._session_key_cache = {"some-other-id": self.SESSION_KEY}
+        resource_body = {"id": RESOURCE_ID, "metadata": "enc", "metadata_key_type": "user_key"}
+
+        result = client._decrypt_metadata(resource_body)
+
+        self.assertEqual(result, DECRYPTED_METADATA)
+        mock_sk.assert_not_called()
+        mock_dav.assert_called_once_with("enc", PASSPHRASE, USER_KEY_FINGERPRINT)
+
+    @patch(_PATCH_DISPLAY)
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    @patch(_PATCH_DECRYPT_WITH_SESSION_KEY)
+    def test_stale_session_key_falls_back_to_asymmetric(self, mock_sk, mock_dav, mock_display):
+        # Stale session key (e.g. metadata rotated server-side) -> GnuPGException -> fallback.
+        mock_sk.side_effect = GnuPGException("session key no longer valid")
+        mock_dav.return_value = json.dumps(DECRYPTED_METADATA)
+
+        client = _make_client()
+        client._session_key_cache = {RESOURCE_ID: self.SESSION_KEY}
+        resource_body = {"id": RESOURCE_ID, "metadata": "enc", "metadata_key_type": "user_key"}
+
+        result = client._decrypt_metadata(resource_body)
+
+        self.assertEqual(result, DECRYPTED_METADATA)
+        mock_sk.assert_called_once()
+        mock_dav.assert_called_once_with("enc", PASSPHRASE, USER_KEY_FINGERPRINT)
+        mock_display.vvvv.assert_called_once()
+        self.assertIn(RESOURCE_ID, mock_display.vvvv.call_args[0][0])
+
+    @patch(_PATCH_DISPLAY)
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    @patch(_PATCH_DECRYPT_WITH_SESSION_KEY)
+    def test_garbage_plaintext_falls_back_to_asymmetric(self, mock_sk, mock_dav, mock_display):
+        # Wrong/stale session key decrypted to non-JSON garbage with a zero exit: json.loads
+        # raises, and we must fall back rather than crash the lookup.
+        mock_sk.return_value = "not-json-at-all"
+        mock_dav.return_value = json.dumps(DECRYPTED_METADATA)
+
+        client = _make_client()
+        client._session_key_cache = {RESOURCE_ID: self.SESSION_KEY}
+        resource_body = {"id": RESOURCE_ID, "metadata": "enc", "metadata_key_type": "user_key"}
+
+        result = client._decrypt_metadata(resource_body)
+
+        self.assertEqual(result, DECRYPTED_METADATA)
+        mock_sk.assert_called_once()
+        mock_dav.assert_called_once_with("enc", PASSPHRASE, USER_KEY_FINGERPRINT)
+        mock_display.vvvv.assert_called_once()
+
+    @patch(_PATCH_DECRYPT)
+    @patch(_PATCH_HTTP)
+    def test_load_session_keys_populates_cache(self, mock_send, mock_decrypt):
+        entries = [{
+            "id": "sk-entry-1",
+            "user_id": USER_ID,
+            "data": "-----BEGIN PGP MESSAGE-----\nbundle\n-----END PGP MESSAGE-----",
+        }]
+        mock_send.return_value = _make_api_response(200, entries)
+        mock_decrypt.return_value = json.dumps({
+            "object_type": "PASSBOLT_SESSION_KEYS",
+            "session_keys": [
+                {"foreign_model": "Resource", "foreign_id": "res-1", "session_key": "9:AAAA"},
+                {"foreign_model": "Resource", "foreign_id": "res-2", "session_key": "9:BBBB"},
+            ],
+        })
+
+        client = _make_client()
+        client._load_session_keys()
+
+        self.assertEqual(client._session_key_cache, {"res-1": "9:AAAA", "res-2": "9:BBBB"})
+        mock_decrypt.assert_called_once_with(entries[0]["data"], PASSPHRASE)
+        for url in _called_urls(mock_send):
+            self.assertIn("metadata/session-keys.json", url)
+
+    @patch(_PATCH_DECRYPT)
+    @patch(_PATCH_HTTP)
+    def test_load_session_keys_http_failure_is_non_fatal(self, mock_send, mock_decrypt):
+        mock_send.return_value = _make_api_response(500, None, success=False)
+
+        client = _make_client()
+        client._load_session_keys()  # must not raise
+
+        self.assertEqual(client._session_key_cache, {})
+        mock_decrypt.assert_not_called()
+
+    @patch(_PATCH_DECRYPT)
+    @patch(_PATCH_HTTP)
+    def test_load_session_keys_wrong_object_type_skipped(self, mock_send, mock_decrypt):
+        entries = [{"id": "sk-1", "data": "blob"}]
+        mock_send.return_value = _make_api_response(200, entries)
+        mock_decrypt.return_value = json.dumps({"object_type": "SOMETHING_ELSE", "session_keys": [
+            {"foreign_model": "Resource", "foreign_id": "res-1", "session_key": "9:AAAA"},
+        ]})
+
+        client = _make_client()
+        client._load_session_keys()
+
+        self.assertEqual(client._session_key_cache, {})
+
+    @patch(_PATCH_DECRYPT_METADATA)
+    @patch(_PATCH_HTTP)
+    @patch(_PATCH_LOAD_SESSION_KEYS)
+    def test_filter_scan_loads_session_keys_once(self, mock_load, mock_send, mock_decrypt):
+        match_id = "11111111-1111-1111-1111-111111111111"
+        mock_send.return_value = _make_api_response(200, [_make_resource_body(match_id)])
+        mock_decrypt.return_value = _make_decrypted_metadata(name="db")
+
+        client = _make_client()
+        client._session_keys_loaded = False  # simulate a fresh, just-logged-in client
+
+        client.find_resource_uuid_by_filters(expected_name="db")
+
+        mock_load.assert_called_once()
+        self.assertTrue(client._session_keys_loaded)
 
 
 if __name__ == "__main__":
