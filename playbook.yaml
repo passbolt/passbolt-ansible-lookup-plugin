@@ -5,6 +5,14 @@
   collections:
     - passbolt.passbolt_lookup
   tasks:
-    - name: "Passbolt lookup demonstration"
+    - name: "Passbolt lookup demonstration (default=UUIID)"
       debug:
-        msg: "{{ lookup('passbolt.passbolt_lookup.passbolt_lookup', 'uuid', skip_ssl_verification = true) }}"
+        msg: "{{ lookup('passbolt.passbolt_lookup.passbolt_lookup', 'UUID', skip_ssl_verification = true) }}"
+
+    - name: "Passbolt lookup demonstration (Using name of resource)"
+      debug:
+        msg: "{{ lookup('passbolt.passbolt_lookup.passbolt_lookup', name='RESOURCE_NAME', skip_ssl_verification = true) }}"
+
+    - name: "Passbolt lookup demonstration (Using combination of name and URI from resource)"
+      debug:
+        msg: "{{ lookup('passbolt.passbolt_lookup.passbolt_lookup', name='RESOURCE_NAME', uri='https://RESOURCE_URI, skip_ssl_verification = true) }}"
