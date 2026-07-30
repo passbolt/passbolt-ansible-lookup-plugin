@@ -368,10 +368,13 @@ class PassboltAPIClient:
                     f"Metadata key '{metadata_key_id}' is not shared with user."
                 )
 
-            decrypted_json = GnuPGService.decrypt_and_verify(
+            decrypted_json = GnuPGService.decrypt_and_verify_any(
                 user_private_key_data,
                 self.passbolt_account.passphrase,
-                self.passbolt_account.key_id
+                {
+                    self.passbolt_account.key_id,
+                    self.passbolt_account.server_key_id,
+                }
             )
 
             key_data = json.loads(decrypted_json)
