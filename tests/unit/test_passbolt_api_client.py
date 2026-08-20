@@ -49,6 +49,7 @@ DECRYPTED_SECRET = {
 
 _PATCH_HTTP = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.http.http_client_service.HTTPClientService.send"
 _PATCH_DECRYPT_AND_VERIFY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.decrypt_and_verify"
+_PATCH_DECRYPT_AND_VERIFY_ANY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.decrypt_and_verify_any"
 _PATCH_DECRYPT = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.decrypt"
 _PATCH_IMPORT_KEY = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service.GnuPGService.import_key"
 _PATCH_JWT_LOGIN = "ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.auth.jwt_auth_strategy.JWTAuthStrategy.login"
@@ -146,19 +147,29 @@ class TestDecryptMetadata(unittest.TestCase):
 
     @patch(_PATCH_IMPORT_KEY)
     @patch(_PATCH_DECRYPT_AND_VERIFY)
+    @patch(_PATCH_DECRYPT_AND_VERIFY_ANY)
     @patch(_PATCH_HTTP)
-    def test_shared_key(self, mock_send, mock_decrypt_and_verify, mock_import_key):
+    def test_shared_key(
+        self,
+        mock_send,
+        mock_decrypt_and_verify_any,
+        mock_decrypt_and_verify,
+        mock_import_key,
+    ):
         metadata_key_id = "mk-1111-2222-3333-444444444444"
 
-        # First decrypt call: decrypting the metadata private key data
-        # Second decrypt call: decrypting the actual metadata
-        mock_decrypt_and_verify.side_effect = [
-            json.dumps({"armored_key": "-----BEGIN PGP PRIVATE KEY-----\nfake\n-----END PGP PRIVATE KEY-----"}),
-            json.dumps(DECRYPTED_METADATA),
-        ]
+        mock_decrypt_and_verify_any.return_value = json.dumps(
+            {
+                "armored_key": (
+                    "-----BEGIN PGP PRIVATE KEY-----\n"
+                    "fake\n"
+                    "-----END PGP PRIVATE KEY-----"
+                )
+            }
+        )
+        mock_decrypt_and_verify.return_value = json.dumps(DECRYPTED_METADATA)
         mock_import_key.return_value = ["AAAAAAAA", "AAAAAAAA"]
 
-        # HTTPClientService.send returns metadata keys list
         metadata_keys_body = [
             {
                 "id": metadata_key_id,
@@ -183,25 +194,45 @@ class TestDecryptMetadata(unittest.TestCase):
         result = client._decrypt_metadata(resource_body)
 
         self.assertEqual(result, DECRYPTED_METADATA)
-        # Second decrypt call should use passphrase=None (shared key already imported)
-        self.assertIsNone(mock_decrypt_and_verify.call_args_list[1][0][1])
+        mock_decrypt_and_verify_any.assert_called_once_with(
+            "encrypted-private-key-data",
+            PASSPHRASE,
+            {
+                USER_KEY_FINGERPRINT,
+                SERVER_KEY_FINGERPRINT,
+            },
+        )
+        mock_decrypt_and_verify.assert_called_once_with(
+            "encrypted-metadata",
+            None,
+            "AAAAAAAA",
+        )
         mock_import_key.assert_called_once()
 
     @patch(_PATCH_IMPORT_KEY)
     @patch(_PATCH_DECRYPT_AND_VERIFY)
+    @patch(_PATCH_DECRYPT_AND_VERIFY_ANY)
     @patch(_PATCH_HTTP)
-    def test_shared_key_mismatched_fingerprints(self, mock_send, mock_decrypt_and_verify, mock_import_key):
+    def test_shared_key_mismatched_fingerprints(
+        self,
+        mock_send,
+        mock_decrypt_and_verify_any,
+        mock_decrypt_and_verify,
+        mock_import_key,
+    ):
         metadata_key_id = "mk-1111-2222-3333-444444444444"
 
-        # First decrypt call: decrypting the metadata private key data
-        # Second decrypt call: decrypting the actual metadata
-        mock_decrypt_and_verify.side_effect = [
-            json.dumps({"armored_key": "-----BEGIN PGP PRIVATE KEY-----\nfake\n-----END PGP PRIVATE KEY-----"}),
-            json.dumps(DECRYPTED_METADATA),
-        ]
+        mock_decrypt_and_verify_any.return_value = json.dumps(
+            {
+                "armored_key": (
+                    "-----BEGIN PGP PRIVATE KEY-----\n"
+                    "fake\n"
+                    "-----END PGP PRIVATE KEY-----"
+                )
+            }
+        )
         mock_import_key.return_value = ["AAAAAAAA", "BBBBBBBB"]
 
-        # HTTPClientService.send returns metadata keys list
         metadata_keys_body = [
             {
                 "id": metadata_key_id,
@@ -225,8 +256,20 @@ class TestDecryptMetadata(unittest.TestCase):
 
         with self.assertRaises(RuntimeError) as ctx:
             client._decrypt_metadata(resource_body)
-        self.assertIn("expected metadata public and private key fingerprint to match",
-                      str(ctx.exception).lower())
+
+        self.assertIn(
+            "expected metadata public and private key fingerprint to match",
+            str(ctx.exception).lower(),
+        )
+        mock_decrypt_and_verify_any.assert_called_once_with(
+            "encrypted-private-key-data",
+            PASSPHRASE,
+            {
+                USER_KEY_FINGERPRINT,
+                SERVER_KEY_FINGERPRINT,
+            },
+        )
+        mock_decrypt_and_verify.assert_not_called()
         mock_import_key.assert_called_once()
 
     @patch(_PATCH_DECRYPT_AND_VERIFY)
@@ -271,16 +314,26 @@ class TestDecryptMetadata(unittest.TestCase):
         self.assertEqual(result, DECRYPTED_METADATA)
 
     @patch(_PATCH_IMPORT_KEY)
-    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    @patch(_PATCH_DECRYPT_AND_VERIFY_ANY)
     @patch(_PATCH_DECRYPT)
     @patch(_PATCH_HTTP)
-    def test_shared_key_verify_false_still_imports_key(self, mock_send, mock_decrypt, mock_decrypt_and_verify, mock_import_key):
+    def test_shared_key_verify_false_still_imports_key(
+        self,
+        mock_send,
+        mock_decrypt,
+        mock_decrypt_and_verify_any,
+        mock_import_key,
+    ):
         metadata_key_id = "mk-1111-2222-3333-444444444444"
 
-        # decrypt_and_verify is still used to unwrap the metadata private key
-        # (that path is unchanged); decrypt (no verify) is used for the metadata blob.
-        mock_decrypt_and_verify.return_value = json.dumps(
-            {"armored_key": "-----BEGIN PGP PRIVATE KEY-----\nfake\n-----END PGP PRIVATE KEY-----"}
+        mock_decrypt_and_verify_any.return_value = json.dumps(
+            {
+                "armored_key": (
+                    "-----BEGIN PGP PRIVATE KEY-----\n"
+                    "fake\n"
+                    "-----END PGP PRIVATE KEY-----"
+                )
+            }
         )
         mock_decrypt.return_value = json.dumps(DECRYPTED_METADATA)
         mock_import_key.return_value = ["AAAAAAAA", "AAAAAAAA"]
@@ -309,8 +362,19 @@ class TestDecryptMetadata(unittest.TestCase):
         result = client._decrypt_metadata(resource_body, verify=False)
 
         self.assertEqual(result, DECRYPTED_METADATA)
+        mock_decrypt_and_verify_any.assert_called_once_with(
+            "encrypted-private-key-data",
+            PASSPHRASE,
+            {
+                USER_KEY_FINGERPRINT,
+                SERVER_KEY_FINGERPRINT,
+            },
+        )
         mock_import_key.assert_called_once()
-        mock_decrypt.assert_called_once_with("encrypted-metadata", None)
+        mock_decrypt.assert_called_once_with(
+            "encrypted-metadata",
+            None,
+        )
 
 
 class TestDecryptSecret(unittest.TestCase):
