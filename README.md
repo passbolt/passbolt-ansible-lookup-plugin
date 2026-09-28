@@ -99,6 +99,7 @@ The lookup returns a dictionary with two sections:
 | `uri`                   | ❌          | String  | `None`  | Filter by decrypted resource URI (exact, case-sensitive). Matches any URI in the list.       |
 | `skip_ssl_verification` | ❌          | Boolean | `false` | Should we ignore SSL validation errors when calling the Passbolt API?                        |
 | `timeout`               | ❌          | Integer | `30`    | How long to wait for the Passbolt API to reply.                                              |
+| `temporary_keyring`     | ❌          | Boolean | `false` | Run the lookup in a dedicated temporary GnuPG keyring, see [GnuPG keyring](#gnupg-keyring).  |
 
 At least one of: a UUID positional argument, or one of `name`/`username`/`uri`
 must be supplied. Mixing a positional UUID with filter kwargs is rejected.
@@ -113,6 +114,27 @@ must be supplied. Mixing a positional UUID with filter kwargs is rejected.
 > ⚠️ Both of these variables are considered secrets and should be treated as such:
 > please avoid storing them unencrypted, please use [Ansible vault](https://docs.ansible.com/projects/ansible/latest/vault_guide/index.html)
 > or similar for storing those.
+
+### GnuPG keyring
+
+By default, the plugin uses the operator's GnuPG keyring (`~/.gnupg` or
+`$GNUPGHOME`): the account kit keys and the keys returned by the server are
+imported into it and remain there after the lookup.
+
+Set the `temporary_keyring` option to `true` to run the lookup in a dedicated
+temporary keyring instead (a `passbolt-gpg-*` directory only readable by the
+current user). At the end of the lookup, successful or not, the gpg-agent
+started for that keyring is stopped and the directory is deleted, so no key
+material or cached passphrase is left behind.
+
+```yaml
+lookup('passbolt.passbolt_lookup.passbolt_lookup', '<resource UUID>', temporary_keyring=true)
+```
+
+The temporary keyring is created in the system temporary directory; set `TMPDIR`
+on the controller to use another location (for example a `tmpfs` mount). Keep
+that path short: gpg-agent creates its sockets inside the keyring and Unix socket
+paths are limited to about 100 characters.
 
 ### Supported Features
 

@@ -1,10 +1,18 @@
+import os
+import shutil
 import subprocess
+import tempfile
 import threading
 
 import gnupg
+from ansible.utils.display import Display
 
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.exceptions.gnupg_exception import \
     GnuPGException
+
+display = Display()
+
+KEYRING_DIR_PREFIX = "passbolt-gpg-"
 
 
 class GnuPGService:
@@ -17,6 +25,34 @@ class GnuPGService:
             instance = gnupg.GPG()
             cls._thread_local.gpg = instance
         return instance
+
+    @classmethod
+    def open_temporary_keyring(cls) -> None:
+        cls.close_temporary_keyring()
+        gnupghome = tempfile.mkdtemp(prefix=KEYRING_DIR_PREFIX)
+        try:
+            instance = gnupg.GPG(gnupghome=gnupghome)
+        except Exception:
+            shutil.rmtree(gnupghome, ignore_errors=True)
+            raise
+        cls._thread_local.gpg = instance
+        cls._thread_local.temporary_gnupghome = gnupghome
+
+    @classmethod
+    def close_temporary_keyring(cls) -> None:
+        gnupghome = getattr(cls._thread_local, "temporary_gnupghome", None)
+        if gnupghome is None:
+            return
+        cls._thread_local.temporary_gnupghome = None
+        cls._thread_local.gpg = None
+        try:
+            subprocess.run(["gpgconf", "--homedir", gnupghome, "--kill", "all"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except (OSError, subprocess.SubprocessError) as exc:
+            display.vvvv("Could not stop the GnuPG agents of '%s': %s" % (gnupghome, exc))
+        shutil.rmtree(gnupghome, ignore_errors=True)
+        if os.path.exists(gnupghome):
+            display.warning("Could not remove the temporary GnuPG keyring '%s'." % gnupghome)
 
     @classmethod
     def __decrypt(cls, data: str, passphrase: str, sign_key_fingerprint: str | None = None) -> str:
