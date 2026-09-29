@@ -15,4 +15,4 @@
 
     - name: "Passbolt lookup demonstration (Using combination of name and URI from resource)"
       debug:
-        msg: "{{ lookup('passbolt.passbolt_lookup.passbolt_lookup', name='RESOURCE_NAME', uri='https://RESOURCE_URI, skip_ssl_verification = true) }}"
+        msg: "{{ lookup('passbolt.passbolt_lookup.passbolt_lookup', name='RESOURCE_NAME', uri='https://RESOURCE_URI', skip_ssl_verification = true) }}"
