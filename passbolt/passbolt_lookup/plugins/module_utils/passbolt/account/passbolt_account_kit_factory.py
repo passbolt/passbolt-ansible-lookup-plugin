@@ -131,7 +131,7 @@ class PassboltAccountKitFactory(object):
                                                              "server key in keyring, got %s." % len(import_server_key_fingerprints))
 
         res = HTTPClientService.send(
-            APIRequest(HTTPMethod.GET, urljoin(account_kit["domain"], "auth/verify.json"), verify=verify,
+            APIRequest(HTTPMethod.GET, urljoin(account_kit["domain"].rstrip("/") + "/", "auth/verify.json"), verify=verify,
                        timeout=timeout))
         server_advertised_fingerprint = res.body["fingerprint"]
         if len(import_server_key_fingerprints) > 0 and server_advertised_fingerprint != import_server_key_fingerprints[0]:
