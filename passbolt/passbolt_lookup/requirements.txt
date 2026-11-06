@@ -18,5 +18,5 @@ referencing==0.37.0
 requests==2.33.0
 resolvelib==1.2.1
 rpds-py==0.30.0
-urllib3==2.6.3
+urllib3==2.8.0
 pytest==9.0.3
