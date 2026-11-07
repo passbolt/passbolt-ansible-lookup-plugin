@@ -313,6 +313,29 @@ class TestDecryptMetadata(unittest.TestCase):
         mock_decrypt.assert_called_once_with("encrypted-metadata", None)
 
 
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    def test_v4_resource_returns_clear_metadata(self, mock_decrypt_and_verify):
+        client = _make_client()
+        resource_body = {
+            "id": "a1b2c3d4-1111-2222-3333-444444444444",
+            "name": "my resource",
+            "username": "admin",
+            "uri": "https://example.com",
+            "description": None,
+            "metadata": None,
+        }
+
+        result = client._decrypt_metadata(resource_body)
+
+        self.assertEqual(result, {
+            "name": "my resource",
+            "username": "admin",
+            "uri": "https://example.com",
+            "description": None,
+        })
+        mock_decrypt_and_verify.assert_not_called()
+
+
 class TestDecryptSecret(unittest.TestCase):
 
     @patch(_PATCH_DECRYPT_AND_VERIFY)
@@ -368,6 +391,21 @@ class TestDecryptSecret(unittest.TestCase):
         self.assertEqual(result, DECRYPTED_SECRET)
         mock_import.assert_called_once_with("-----BEGIN PGP PRIVATE KEY-----\nis this real life\n-----END PGP PRIVATE KEY-----", None)
         mock_decrypt_and_verify.assert_called_once_with("encrypted-secret-data", PASSPHRASE, OTHER_USER_KEY_FINGERPRINT)
+
+
+    @patch(_PATCH_DECRYPT_AND_VERIFY)
+    def test_v4_password_string_secret(self, mock_decrypt_and_verify):
+        # v4 "password-string" resources have the bare password as secret, not JSON
+        for password in ("plain password", "1234", '"quoted"'):
+            mock_decrypt_and_verify.return_value = password
+            client = _make_client()
+            resource_body = {
+                "modified_by": USER_ID,
+                "personal": True,
+                "secrets": [{"user_id": USER_ID, "data": "encrypted-secret-data"}],
+            }
+
+            self.assertEqual(client._decrypt_secret(resource_body), {"password": password})
 
     @patch(_PATCH_DECRYPT_AND_VERIFY)
     def test_no_secrets_returns_none(self, mock_decrypt_and_verify):

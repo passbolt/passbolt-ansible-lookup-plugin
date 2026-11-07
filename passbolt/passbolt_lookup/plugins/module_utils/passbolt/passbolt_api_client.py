@@ -268,6 +268,9 @@ class PassboltAPIClient:
     def _decrypt_metadata(self, resource_body: dict, verify: bool = True) -> dict:
         encrypted_metadata = resource_body.get("metadata")
         if not encrypted_metadata:
+            # v4 resources keep their metadata in clear
+            if resource_body.get("name") is not None:
+                return {key: resource_body.get(key) for key in ("name", "username", "uri", "description")}
             raise ValueError("Resource has no encrypted metadata.")
 
         resource_id = resource_body.get("id")
@@ -451,4 +454,9 @@ class PassboltAPIClient:
             secret_signature_fingerprint
         )
 
-        return json.loads(decrypted_json)
+        # v4 "password-string" resources have the bare password as secret
+        try:
+            secret = json.loads(decrypted_json)
+        except json.JSONDecodeError:
+            secret = None
+        return secret if isinstance(secret, dict) else {"password": decrypted_json}
