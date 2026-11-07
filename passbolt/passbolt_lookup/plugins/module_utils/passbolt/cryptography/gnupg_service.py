@@ -54,6 +54,48 @@ class GnuPGService:
         return cls.__decrypt(data, passphrase, sign_key_fingerprint)
 
     @classmethod
+    def decrypt_and_verify_any(
+        cls,
+        data: str,
+        passphrase: str,
+        sign_key_fingerprints: set[str],
+    ) -> str:
+        trusted_fingerprints = {
+            fingerprint.upper()
+            for fingerprint in sign_key_fingerprints
+            if fingerprint
+        }
+
+        if not trusted_fingerprints:
+            raise GnuPGException(
+                "At least one signing key fingerprint is required for verification."
+            )
+
+        decrypted = cls._gpg().decrypt(data, passphrase=passphrase)
+
+        if not decrypted.ok:
+            raise GnuPGException(
+                "Couldn't decrypt data: '%s'." % decrypted.status
+            )
+
+        signer_fingerprints = {
+            fingerprint.upper()
+            for fingerprint in (
+                getattr(decrypted, "fingerprint", None),
+                getattr(decrypted, "pubkey_fingerprint", None),
+            )
+            if fingerprint
+        }
+
+        if (
+            not getattr(decrypted, "valid", False)
+            or signer_fingerprints.isdisjoint(trusted_fingerprints)
+        ):
+            raise GnuPGException("Couldn't verify decrypted data.")
+
+        return decrypted.data.decode("utf-8")
+
+    @classmethod
     def decrypt_with_session_key(cls, data: str, session_key: str,
                                  sign_key_fingerprint: str | None = None) -> str:
         if not session_key:

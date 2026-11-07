@@ -37,6 +37,134 @@ def _status_validsig(fingerprint):
             % (fingerprint, fingerprint)).encode("utf-8")
 
 
+class TestDecryptAndVerifyAny(unittest.TestCase):
+
+    @staticmethod
+    def _result(
+        *,
+        ok=True,
+        valid=True,
+        fingerprint=FPR,
+        pubkey_fingerprint=None,
+        status="decryption ok",
+    ):
+        result = MagicMock()
+        result.ok = ok
+        result.valid = valid
+        result.fingerprint = fingerprint
+        result.pubkey_fingerprint = pubkey_fingerprint
+        result.status = status
+        result.data = PLAINTEXT.encode("utf-8")
+        return result
+
+    @patch(_PATCH_GPG)
+    def test_accepts_trusted_signer(self, mock_gpg):
+        mock_gpg.return_value.decrypt.return_value = self._result()
+
+        result = GnuPGService.decrypt_and_verify_any(
+            "encrypted",
+            "passphrase",
+            {FPR, "OTHERFPR"},
+        )
+
+        self.assertEqual(result, PLAINTEXT)
+
+    @patch(_PATCH_GPG)
+    def test_accepts_primary_fingerprint_for_signing_subkey(self, mock_gpg):
+        mock_gpg.return_value.decrypt.return_value = self._result(
+            fingerprint="SIGNINGSUBKEYFPR",
+            pubkey_fingerprint=FPR,
+        )
+
+        result = GnuPGService.decrypt_and_verify_any(
+            "encrypted",
+            "passphrase",
+            {FPR},
+        )
+
+        self.assertEqual(result, PLAINTEXT)
+
+    @patch(_PATCH_GPG)
+    def test_matches_fingerprints_case_insensitively(self, mock_gpg):
+        mock_gpg.return_value.decrypt.return_value = self._result(
+            fingerprint=FPR.lower(),
+        )
+
+        result = GnuPGService.decrypt_and_verify_any(
+            "encrypted",
+            "passphrase",
+            {FPR},
+        )
+
+        self.assertEqual(result, PLAINTEXT)
+
+    @patch(_PATCH_GPG)
+    def test_rejects_unknown_signer(self, mock_gpg):
+        mock_gpg.return_value.decrypt.return_value = self._result(
+            fingerprint="UNKNOWNFPR",
+        )
+
+        with self.assertRaises(GnuPGException):
+            GnuPGService.decrypt_and_verify_any(
+                "encrypted",
+                "passphrase",
+                {FPR},
+            )
+
+    @patch(_PATCH_GPG)
+    def test_rejects_invalid_signature_from_trusted_key(self, mock_gpg):
+        mock_gpg.return_value.decrypt.return_value = self._result(
+            valid=False,
+            fingerprint=FPR,
+        )
+
+        with self.assertRaises(GnuPGException):
+            GnuPGService.decrypt_and_verify_any(
+                "encrypted",
+                "passphrase",
+                {FPR},
+            )
+
+    @patch(_PATCH_GPG)
+    def test_rejects_missing_signature(self, mock_gpg):
+        mock_gpg.return_value.decrypt.return_value = self._result(
+            valid=False,
+            fingerprint=None,
+            pubkey_fingerprint=None,
+        )
+
+        with self.assertRaises(GnuPGException):
+            GnuPGService.decrypt_and_verify_any(
+                "encrypted",
+                "passphrase",
+                {FPR},
+            )
+
+    @patch(_PATCH_GPG)
+    def test_rejects_decryption_failure(self, mock_gpg):
+        mock_gpg.return_value.decrypt.return_value = self._result(
+            ok=False,
+            valid=False,
+            fingerprint=None,
+            status="decryption failed",
+        )
+
+        with self.assertRaises(GnuPGException):
+            GnuPGService.decrypt_and_verify_any(
+                "encrypted",
+                "passphrase",
+                {FPR},
+            )
+
+    def test_rejects_empty_trusted_signer_set(self):
+        with self.assertRaises(GnuPGException):
+            GnuPGService.decrypt_and_verify_any(
+                "encrypted",
+                "passphrase",
+                set(),
+            )
+
+
 class TestDecryptWithSessionKey(unittest.TestCase):
 
     @patch(_PATCH_GPG, return_value=MagicMock(gnupghome=None))
