@@ -12,7 +12,8 @@ class PassboltAccount(PassboltEntity):
         self.key_id = key_id
         self.email = email
         self.passphrase = passphrase
-        self.fullbase_url = fullbase_url
+        # Trailing slash, else urljoin drops a path like passbolt cloud's /<organisation>
+        self.fullbase_url = fullbase_url.rstrip('/') + '/'
         self.server_key_id = server_key_id
 
     @classmethod
