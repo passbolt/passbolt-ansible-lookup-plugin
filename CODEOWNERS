@@ -1,0 +1,10 @@
+# Managed by Pulumi (gitlab-permissions-as-code). Do not edit by hand.
+# Ownership is declared in IaC; hand edits are reverted on the next apply.
+
+[Owners]
+* @passbolt/groups/support-group
+
+[Governance]
+/CODEOWNERS         @passbolt/groups/support-group
+/.gitlab/CODEOWNERS @passbolt/groups/support-group
+/docs/CODEOWNERS    @passbolt/groups/support-group
