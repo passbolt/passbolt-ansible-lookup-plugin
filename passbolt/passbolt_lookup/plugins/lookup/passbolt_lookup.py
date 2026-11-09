@@ -48,6 +48,16 @@ DOCUMENTATION = r"""
         - How long to wait for the Passbolt API to reply.
       type: int
       default: 30
+    temporary_keyring:
+      description:
+        - Import the keys into a dedicated temporary GnuPG keyring, removed at the
+          end of the lookup together with the gpg-agent it started.
+        - When disabled, the operator's keyring (C(~/.gnupg) or C($GNUPGHOME)) is
+          used and the imported keys remain in it after the lookup.
+        - The temporary keyring is created in the system temporary directory; set
+          C(TMPDIR) on the controller to choose another location.
+      type: bool
+      default: false
 """
 
 import re
@@ -61,6 +71,8 @@ from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.
     PassboltAPIClient
 from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.account.passbolt_account_kit_factory import \
     PassboltAccountKitFactory
+from ansible_collections.passbolt.passbolt_lookup.plugins.module_utils.passbolt.cryptography.gnupg_service import \
+    GnuPGService
 
 display = Display()
 
@@ -121,7 +133,10 @@ class LookupModule(LookupBase):
             resolution_mode = "filters"
 
         display.vvvv(u"Skipping SSL validation is set to '%s'." % self.get_option('skip_ssl_verification'))
+        display.vvvv(u"Temporary GnuPG keyring is set to '%s'." % self.get_option('temporary_keyring'))
         try:
+            if self.get_option('temporary_keyring'):
+                GnuPGService.open_temporary_keyring()
             passbolt_account = PassboltAccountKitFactory.from_string(
                 passbolt_vars[self.ACCOUNT_KIT_OPTION_KEY],
                 passbolt_vars[self.ACCOUNT_PASSPHRASE_OPTION_KEY],
@@ -162,3 +177,5 @@ class LookupModule(LookupBase):
 
         except Exception as e:
             raise AnsibleError("Passbolt lookup failed: %s" % e)
+        finally:
+            GnuPGService.close_temporary_keyring()

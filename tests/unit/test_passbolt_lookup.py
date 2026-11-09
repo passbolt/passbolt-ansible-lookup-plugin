@@ -1,9 +1,12 @@
 import unittest
 import uuid
 from unittest.mock import MagicMock, patch
+
+import yaml
 from ansible.errors import AnsibleError
 
 from ansible_collections.passbolt.passbolt_lookup.plugins.lookup.passbolt_lookup import (
+    DOCUMENTATION,
     LookupModule,
     UUID_REGEX,
 )
@@ -26,6 +29,7 @@ RESOLVED_UUID = "11111111-1111-1111-1111-111111111111"
 
 _PATCH_FACTORY = "ansible_collections.passbolt.passbolt_lookup.plugins.lookup.passbolt_lookup.PassboltAccountKitFactory"
 _PATCH_API_CLIENT = "ansible_collections.passbolt.passbolt_lookup.plugins.lookup.passbolt_lookup.PassboltAPIClient"
+_PATCH_GNUPG_SERVICE = "ansible_collections.passbolt.passbolt_lookup.plugins.lookup.passbolt_lookup.GnuPGService"
 
 
 def _make_lookup(rendered_passbolt_vars={}, direct_options=None):
@@ -43,6 +47,7 @@ def _make_lookup(rendered_passbolt_vars={}, direct_options=None):
         "uri": None,
         "skip_ssl_verification": True,
         "timeout": 30,
+        "temporary_keyring": False,
     }
     if direct_options:
         options.update(direct_options)
@@ -385,6 +390,105 @@ class TestRunWrapsExceptions(unittest.TestCase):
 
         self.assertIn("Passbolt lookup failed", str(ctx.exception))
         self.assertIn("no match", str(ctx.exception))
+
+
+class TestRunTemporaryKeyring(unittest.TestCase):
+    """PB-54783: the temporary keyring is opt-in and torn down whatever the lookup outcome."""
+
+    @patch(_PATCH_GNUPG_SERVICE)
+    @patch(_PATCH_FACTORY)
+    @patch(_PATCH_API_CLIENT)
+    def test_operator_keyring_used_by_default(self, mock_api_client, mock_factory, mock_gnupg):
+        _stub_api_client(mock_api_client)
+        plugin = _make_lookup(rendered_passbolt_vars=VARIABLES["passbolt"])
+
+        plugin.run([VALID_UUID], variables=VARIABLES)
+
+        mock_gnupg.open_temporary_keyring.assert_not_called()
+
+    @patch(_PATCH_GNUPG_SERVICE)
+    @patch(_PATCH_FACTORY)
+    @patch(_PATCH_API_CLIENT)
+    def test_keyring_opened_before_account_kit_import(self, mock_api_client, mock_factory, mock_gnupg):
+        # The account kit ingestion imports the user private key, so the keyring must be ready first.
+        _stub_api_client(mock_api_client)
+        calls = []
+        mock_gnupg.open_temporary_keyring.side_effect = lambda: calls.append("open_temporary_keyring")
+        mock_factory.from_string.side_effect = lambda *args, **kwargs: calls.append("from_string")
+        plugin = _make_lookup(direct_options={"temporary_keyring": True},
+                              rendered_passbolt_vars=VARIABLES["passbolt"])
+
+        plugin.run([VALID_UUID], variables=VARIABLES)
+
+        self.assertEqual(calls, ["open_temporary_keyring", "from_string"])
+
+    @patch(_PATCH_GNUPG_SERVICE)
+    @patch(_PATCH_FACTORY)
+    @patch(_PATCH_API_CLIENT)
+    def test_keyring_closed_after_successful_lookup(self, mock_api_client, mock_factory, mock_gnupg):
+        _stub_api_client(mock_api_client)
+        plugin = _make_lookup(direct_options={"temporary_keyring": True},
+                              rendered_passbolt_vars=VARIABLES["passbolt"])
+
+        plugin.run([VALID_UUID], variables=VARIABLES)
+
+        mock_gnupg.open_temporary_keyring.assert_called_once_with()
+        mock_gnupg.close_temporary_keyring.assert_called_once_with()
+
+    @patch(_PATCH_GNUPG_SERVICE)
+    @patch(_PATCH_FACTORY)
+    @patch(_PATCH_API_CLIENT)
+    def test_keyring_closed_when_lookup_fails(self, mock_api_client, mock_factory, mock_gnupg):
+        api = _stub_api_client(mock_api_client)
+        api.get_resource.side_effect = LookupError("Resource not found.")
+        plugin = _make_lookup(direct_options={"temporary_keyring": True},
+                              rendered_passbolt_vars=VARIABLES["passbolt"])
+
+        with self.assertRaises(AnsibleError):
+            plugin.run([VALID_UUID], variables=VARIABLES)
+
+        mock_gnupg.close_temporary_keyring.assert_called_once_with()
+
+    @patch(_PATCH_GNUPG_SERVICE)
+    @patch(_PATCH_FACTORY)
+    @patch(_PATCH_API_CLIENT)
+    def test_keyring_closed_when_account_kit_is_rejected(self, mock_api_client, mock_factory, mock_gnupg):
+        # The account kit ingestion imports the user private key before it can fail.
+        mock_factory.from_string.side_effect = Exception("Invalid account kit format.")
+        plugin = _make_lookup(direct_options={"temporary_keyring": True},
+                              rendered_passbolt_vars=VARIABLES["passbolt"])
+
+        with self.assertRaises(AnsibleError):
+            plugin.run([VALID_UUID], variables=VARIABLES)
+
+        mock_gnupg.close_temporary_keyring.assert_called_once_with()
+        mock_api_client.assert_not_called()
+
+    @patch(_PATCH_GNUPG_SERVICE)
+    @patch(_PATCH_FACTORY)
+    @patch(_PATCH_API_CLIENT)
+    def test_lookup_fails_when_keyring_cannot_be_created(self, mock_api_client, mock_factory, mock_gnupg):
+        mock_gnupg.open_temporary_keyring.side_effect = OSError("gpg not found")
+        plugin = _make_lookup(direct_options={"temporary_keyring": True},
+                              rendered_passbolt_vars=VARIABLES["passbolt"])
+
+        with self.assertRaises(AnsibleError) as ctx:
+            plugin.run([VALID_UUID], variables=VARIABLES)
+
+        self.assertIn("Passbolt lookup failed", str(ctx.exception))
+        # No silent fallback to the operator's keyring: nothing gets imported.
+        mock_factory.from_string.assert_not_called()
+        mock_gnupg.close_temporary_keyring.assert_called_once_with()
+
+
+class TestDocumentation(unittest.TestCase):
+
+    def test_temporary_keyring_is_a_bool_disabled_by_default(self):
+        # get_option is mocked in the other tests; at runtime the default comes from DOCUMENTATION.
+        option = yaml.safe_load(DOCUMENTATION)["options"]["temporary_keyring"]
+
+        self.assertEqual(option["type"], "bool")
+        self.assertIs(option["default"], False)
 
 
 if __name__ == "__main__":
