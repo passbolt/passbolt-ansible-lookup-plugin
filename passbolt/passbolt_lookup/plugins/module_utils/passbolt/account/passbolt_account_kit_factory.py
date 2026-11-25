@@ -102,7 +102,11 @@ class PassboltAccountKitFactory(object):
         except binascii.Error:
             raise PassboltAccountKitDeserializationException("Raw account kit string isn't valid base64.")
 
-        decoded_account_kit_str = decoded_account_kit_bytes.decode('ascii')
+        try:
+            decoded_account_kit_str = decoded_account_kit_bytes.decode('utf-8')
+        except UnicodeDecodeError as e:
+            raise PassboltAccountKitDeserializationException(
+                "Account kit isn't valid UTF-8 text.") from e
         if not (decoded_account_kit_str.startswith("-----BEGIN PGP SIGNED MESSAGE-----")
                 and decoded_account_kit_str.endswith("-----END PGP SIGNATURE-----\n")):
             raise PassboltAccountKitDeserializationException("Account kit doesn't seem to be a PGP signed message.")

@@ -158,6 +158,8 @@ class GnuPGService:
 
     @classmethod
     def verify(cls, data: str, key_id: str) -> str:
+        if isinstance(data, str):
+            data = data.encode('utf-8')
         verified = cls._gpg().verify(data, extra_args=['-o', '-'])
         if key_id is not None and (not verified or verified.fingerprint != key_id):
             raise GnuPGException("Couldn't verify data.")
